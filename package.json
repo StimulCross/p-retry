@@ -82,5 +82,8 @@
 		"ts-jest": "^29.4.0",
 		"tsukuru": "^0.8.3",
 		"typescript": "^5.8.3"
+	},
+	"publishConfig": {
+		"access": "public"
 	}
 }
