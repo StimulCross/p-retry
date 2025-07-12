@@ -1,3 +1,16 @@
+This is a fork of the popular [p-retry](https://github.com/StimulCross/p-retry/tree/main) library with support for both ESM and CommonJS module systems.
+
+> [!NOTE]
+> **Difference from the original library:**  
+> This fork includes a modified implementation of the `AbortError` class.
+> It now supports the standard [`cause`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Error/cause) property,
+> allowing you to specify an explicit error cause via the second constructor argument (e.g. `new AbortError('message', { cause: originalError })`).
+>
+> Also, the `pRetry` function throws `AbortError` itself, instead of throwing the underlying original error.
+> Specify original error as `cause` to access it.
+
+---
+
 # p-retry
 
 > Retry a promise-returning or async function
@@ -7,26 +20,47 @@ It does exponential backoff and supports custom retry strategies for failed oper
 ## Install
 
 ```sh
-npm install p-retry
+npm install @stimulcross/p-retry
+```
+
+```sh
+yarn add @stimulcross/p-retry
+```
+
+```sh
+pnpm add @stimulcross/p-retry
 ```
 
 ## Usage
 
 ```js
-import pRetry, {AbortError} from 'p-retry';
+import { AbortError, pRetry } from '@stimulcross/p-retry';
 
-const run = async () => {
-	const response = await fetch('https://sindresorhus.com/unicorn');
+async function run() {
+	try {
+		// your logic that may throw
+		throw new ValidationError();
+	} catch (err) {
+		if (err instanceof ValidationError) {
+			// Abort all retries and preserve the original cause
+			throw new AbortError('Aborting due to validation error.', { cause: err });
+		}
 
-	// Abort retrying if the resource doesn't exist
-	if (response.status === 404) {
-		throw new AbortError(response.statusText);
+		// Other errors will be retried by the library.
+		throw err;
 	}
+}
 
-	return response.blob();
-};
+try {
+	await pRetry(run, { retries: 5 });
+} catch (error) {
+	if (error instanceof AbortError) {
+		console.error('Aborted with message:', error.message);
+		console.error('Original cause:', error.cause);
+	}
+}
 
-console.log(await pRetry(run, {retries: 5}));
+console.log(await pRetry(run, { retries: 5 }));
 ```
 
 ## API
@@ -54,7 +88,7 @@ Type: `Function`
 Callback invoked on each retry. Receives a context object containing the error and retry state information.
 
 ```js
-import pRetry from 'p-retry';
+import { pRetry } from '@stimulcross/p-retry';
 
 const run = async () => {
 	const response = await fetch('https://sindresorhus.com/unicorn');
@@ -67,13 +101,13 @@ const run = async () => {
 };
 
 const result = await pRetry(run, {
-	onFailedAttempt: ({error, attemptNumber, retriesLeft}) => {
+	onFailedAttempt: ({ error, attemptNumber, retriesLeft }) => {
 		console.log(`Attempt ${attemptNumber} failed. There are ${retriesLeft} retries left.`);
 		// 1st request => Attempt 1 failed. There are 5 retries left.
 		// 2nd request => Attempt 2 failed. There are 4 retries left.
 		// …
 	},
-	retries: 5
+	retries: 5,
 });
 
 console.log(result);
@@ -82,7 +116,7 @@ console.log(result);
 The `onFailedAttempt` function can return a promise. For example, to add a [delay](https://github.com/sindresorhus/delay):
 
 ```js
-import pRetry from 'p-retry';
+import { pRetry } from '@stimulcross/p-retry';
 import delay from 'delay';
 
 const run = async () => { … };
@@ -106,7 +140,7 @@ Decide if a retry should occur based on the context. Returning true triggers a r
 It is not called for `TypeError` (except network errors) and `AbortError`.
 
 ```js
-import pRetry from 'p-retry';
+import { pRetry } from '@stimulcross/p-retry';
 
 const run = async () => { … };
 
@@ -166,7 +200,7 @@ Type: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSign
 You can abort retrying using [`AbortController`](https://developer.mozilla.org/en-US/docs/Web/API/AbortController).
 
 ```js
-import pRetry from 'p-retry';
+import { pRetry } from '@stimulcross/p-retry';
 
 const run = async () => { … };
 const controller = new AbortController();
@@ -197,46 +231,45 @@ Only affects platforms with a `.unref()` method on timeouts, such as Node.js.
 Wrap a function so that each call is automatically retried on failure.
 
 ```js
-import {makeRetriable} from 'p-retry';
+import { makeRetriable } from '@stimulcross/p-retry';
 
-const fetchWithRetry = makeRetriable(fetch, {retries: 5});
+const fetchWithRetry = makeRetriable(fetch, { retries: 5 });
 
 const response = await fetchWithRetry('https://sindresorhus.com/unicorn');
 ```
 
-### AbortError(message)
-### AbortError(error)
+### AbortError(message, {cause})
 
 Abort retrying and reject the promise.
 
-### message
+#### message
 
 Type: `string`
 
 An error message.
 
-### error
+#### errorOptions
 
-Type: `Error`
+Type: `object`
 
-A custom error.
+Options with `cause` property.
 
 ## Tip
 
 You can pass arguments to the function being retried by wrapping it in an inline arrow function:
 
 ```js
-import pRetry from 'p-retry';
+import { pRetry } from '@stimulcross/p-retry';
 
 const run = async emoji => {
 	// …
 };
 
 // Without arguments
-await pRetry(run, {retries: 5});
+await pRetry(run, { retries: 5 });
 
 // With arguments
-await pRetry(() => run('🦄'), {retries: 5});
+await pRetry(() => run('🦄'), { retries: 5 });
 ```
 
 ## FAQ
@@ -250,7 +283,7 @@ The package uses `setTimeout` and `clearTimeout` from the global scope, so you c
 Use an [`AbortController`](https://developer.mozilla.org/en-US/docs/Web/API/AbortController) to signal cancellation on SIGINT, and pass its `signal` to `pRetry`:
 
 ```js
-import pRetry from 'p-retry';
+import { pRetry } from '@stimulcross/p-retry';
 
 const controller = new AbortController();
 
@@ -259,7 +292,7 @@ process.once('SIGINT', () => {
 });
 
 try {
-	await pRetry(run, {signal: controller.signal});
+	await pRetry(run, { signal: controller.signal });
 } catch (error) {
 	console.log('Retry stopped due to:', error.message);
 }

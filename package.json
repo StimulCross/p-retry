@@ -1,30 +1,50 @@
 {
-	"name": "p-retry",
-	"version": "7.0.0-0",
+	"name": "@stimulcross/p-retry",
+	"version": "0.0.1",
 	"description": "Retry a promise-returning or async function",
 	"license": "MIT",
-	"repository": "sindresorhus/p-retry",
-	"funding": "https://github.com/sponsors/sindresorhus",
-	"author": {
-		"name": "Sindre Sorhus",
-		"email": "sindresorhus@gmail.com",
-		"url": "https://sindresorhus.com"
-	},
-	"type": "module",
+	"repository": "https://github.com/StimulCross/p-retry.git",
+	"author": "Stimul Cross",
+	"main": "lib",
+	"module": "es",
+	"types": "lib",
 	"exports": {
-		"types": "./index.d.ts",
-		"default": "./index.js"
+		".": {
+			"require": "./lib/index.js",
+			"import": "./es/index.mjs",
+			"types": "./lib/index.d.ts",
+			"default": "./lib/index.js"
+		}
 	},
 	"sideEffects": false,
 	"engines": {
 		"node": ">=20"
 	},
 	"scripts": {
-		"test": "xo && ava && tsd"
+		"build": "tsukuru -c tsconfig.build.json",
+		"rebuild": "tsukuru --clean -c tsconfig.build.json",
+		"clear": "rimraf es && rimraf lib",
+		"prepare": "husky",
+		"preversion": "yarn run rebuild && yarn run format:check && yarn run lint",
+		"postversion": "yarn install",
+		"prepublishOnly": "yarn run rebuild && yarn run format:check && yarn run lint",
+		"format:check": "prettier --check \"**/*.{ts,md,js,mjs,json}\"",
+		"format:fix": "prettier --write \"**/*.{ts,md,js,mjs,json}\"",
+		"lint": "eslint .",
+		"lint:fix": "eslint . --fix",
+		"test": "jest --config jest.config.js --detectOpenHandles --forceExit",
+		"test:verbose": "jest --config jest.config.js --verbose --detectOpenHandles --forceExit",
+		"test:cov": "jest --config jest.config.js --coverage --detectOpenHandles --forceExit",
+		"test:cov:verbose": "jest --config jest.config.js --coverage --verbose --detectOpenHandles --forceExit"
 	},
 	"files": [
-		"index.js",
-		"index.d.ts"
+		"lib",
+		"es",
+		"README.md",
+		"LICENSE",
+		"!lib/**/*.d.ts.map",
+		"!es/**/*.d.ts.map",
+		"!es/**/*.d.ts"
 	],
 	"keywords": [
 		"promise",
@@ -45,18 +65,22 @@
 		"parallel",
 		"bluebird"
 	],
-	"dependencies": {
-		"is-network-error": "^1.1.0"
-	},
 	"devDependencies": {
-		"ava": "^6.3.0",
-		"delay": "^6.0.0",
-		"tsd": "^0.32.0",
-		"xo": "^0.60.0"
-	},
-	"xo": {
-		"rules": {
-			"no-await-in-loop": "off"
-		}
+		"@jest/globals": "^30.0.4",
+		"@stimulcross/commitlint-config": "^2.0.0",
+		"@stimulcross/eslint-config-node": "^2.0.0",
+		"@stimulcross/eslint-config-typescript": "^2.0.0",
+		"@stimulcross/prettier-config": "^2.0.0",
+		"@types/jest": "^30.0.0",
+		"commitlint": "^19.8.1",
+		"eslint": "^9.30.1",
+		"husky": "^9.1.7",
+		"jest": "^30.0.4",
+		"lint-staged": "^16.1.2",
+		"prettier": "^3.6.2",
+		"rimraf": "^6.0.1",
+		"ts-jest": "^29.4.0",
+		"tsukuru": "^0.8.3",
+		"typescript": "^5.8.3"
 	}
 }
