@@ -15,8 +15,8 @@ import { calculateDelay, createRetryContext, isNetworkError } from './utils';
  * @param options - Options for configuring the retry behavior.
  *
  * @example
- *```
- * import pRetry, {AbortError} from '@stimulcross/p-retry';
+ *```js
+ * import pRetry, { AbortError } from '@stimulcross/p-retry';
  *
  * const run = async () => {
  * 	 const response = await fetch('https://sindresorhus.com/unicorn');

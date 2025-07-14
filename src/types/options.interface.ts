@@ -5,7 +5,7 @@ export interface Options {
 	 *	Callback invoked on each retry. Receives a context object containing the error and retry state information.
 	 *
 	 *	@example
-	 *	```
+	 *	```js
 	 *	import pRetry from 'p-retry';
 	 *
 	 *	const run = async () => {
@@ -34,7 +34,7 @@ export interface Options {
 	 *	The `onFailedAttempt` function can return a promise. For example, to add a [delay](https://github.com/sindresorhus/delay):
 	 *
 	 *	@example
-	 *	```
+	 *	```js
 	 *	import pRetry from 'p-retry';
 	 *	import delay from 'delay';
 	 *
@@ -58,7 +58,7 @@ export interface Options {
 	 *	It is not called for `TypeError` (except network errors) and `AbortError`.
 	 *
 	 *	@example
-	 *	```
+	 *	```js
 	 *	import pRetry from 'p-retry';
 	 *
 	 *	const run = async () => { … };
@@ -117,7 +117,7 @@ export interface Options {
 	/**
 	 *	You can abort retrying using [`AbortController`](https://developer.mozilla.org/en-US/docs/Web/API/AbortController).
 	 *
-	 *	```
+	 *	```js
 	 *	import pRetry from 'p-retry';
 	 *
 	 *	const run = async () => { … };
