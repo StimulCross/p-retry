@@ -167,66 +167,101 @@ describe('pRetry', () => {
 	});
 
 	describe('AbortError', () => {
-		it('should create AbortError with string message', () => {
-			const error = new AbortError('fixture');
-			expect(error.constructor.name).toBe('AbortError');
-			expect(error.message).toBe('fixture');
+		it('should create AbortError with message', () => {
+			const error = new AbortError('Custom message');
+			expect(error).toBeInstanceOf(AbortError);
+			expect(error.name).toBe('AbortError');
+			expect(error.message).toBe('Custom message');
+			expect(error.signal).toBeUndefined();
 		});
 
-		it('should create AbortError with options and cause', () => {
-			const originalError = new Error('fixture');
-			const error = new AbortError('Aborting', { cause: originalError });
-			expect(error.constructor.name).toBe('AbortError');
+		it('should create AbortError with cause and options', () => {
+			const cause = new Error('Original failure');
+			const error = new AbortError('Aborting', { cause });
+
+			expect(error).toBeInstanceOf(AbortError);
 			expect(error.message).toBe('Aborting');
-			expect(error.cause).toBe(originalError);
+			expect(error.cause).toBe(cause);
+			expect(error.signal).toBeUndefined();
 		});
 
-		it('should stop operation immediately on AbortError', async () => {
+		it('should support AbortError.fromSignal', () => {
+			const controller = new AbortController();
+			controller.abort('some reason');
+
+			const error = AbortError.fromSignal(controller.signal, 'Aborted due to signal');
+
+			expect(error).toBeInstanceOf(AbortError);
+			expect(error.message).toBe('Aborted due to signal');
+			expect(error.signal).toBe(controller.signal);
+			expect(error.cause).toBe('some reason');
+		});
+
+		it('should support AbortError.fromError', () => {
+			const original = new Error('original');
+			const error = AbortError.fromError(original, 'wrapped');
+
+			expect(error).toBeInstanceOf(AbortError);
+			expect(error.message).toBe('wrapped');
+			expect(error.cause).toBe(original);
+			expect(error.signal).toBeUndefined();
+		});
+
+		it('should stop retrying immediately on AbortError', async () => {
 			let attempts = 0;
 
-			await expect(
-				pRetry(
+			expect.assertions(4);
+
+			try {
+				await pRetry(
 					async () => {
 						attempts++;
-						if (attempts === 3) {
-							throw new AbortError('stop');
-						}
-
-						throw new Error('test');
+						if (attempts === 3) throw new AbortError('No point in retrying', { cause: fixtureError });
+						throw new Error('Temporary failure');
 					},
 					{
-						retries: 10,
-						minTimeout: 100,
+						retries: 5,
+						minTimeout: 10,
 					},
-				),
-			).rejects.toBeInstanceOf(AbortError);
+				);
+			} catch (e: any) {
+				expect(e).toBeInstanceOf(AbortError);
+				expect(e.message).toBe('No point in retrying');
+				expect(e.cause).toBe(fixtureError);
+			}
 
-			expect(attempts).toBe(3); // Should stop after AbortError
+			expect(attempts).toBe(3); // Should stop exactly on third attempt
 		});
 
-		it('should preserve the abort reason', async () => {
+		it('should throw AbortError from signal abort (with reason)', async () => {
 			let attempts = 0;
 			const controller = new AbortController();
 
-			const abortPromise = pRetry(
-				async attemptNumber => {
-					await delay(40);
-					attempts++;
-					if (attemptNumber === 3) {
-						controller.abort(fixtureError);
-						return;
-					}
+			expect.assertions(5);
 
-					throw fixtureError;
-				},
-				{
-					signal: controller.signal,
-					maxTimeout: 500,
-				},
-			);
+			try {
+				await pRetry(
+					async () => {
+						attempts++;
+						if (attempts === 3) {
+							controller.abort(fixtureError);
+						}
+						throw new Error('keep retrying');
+					},
+					{
+						signal: controller.signal,
+						retries: 5,
+						minTimeout: 10,
+					},
+				);
+			} catch (e: any) {
+				expect(e).toBeInstanceOf(AbortError);
+				expect(e.message).toBe('Aborted by signal');
+				expect(e.signal).toBe(controller.signal);
+				expect(e.cause).toBe(fixtureError);
+			}
 
-			await expect(abortPromise).rejects.toThrow();
-
+			// simulate abort on 3rd attempt
 			expect(attempts).toBe(3);
 		});
 	});

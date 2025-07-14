@@ -1,6 +1,6 @@
 import { AbortError } from './errors';
 import { type InputFunction, type Options } from './types';
-import { calculateDelay, createRetryContext, isNetworkError } from './utils';
+import { calculateDelay, createRetryContext, isNetworkError, throwIfAborted } from './utils';
 
 /**
  * Returns a `Promise` that is fulfilled when calling `input` returns a fulfilled promise.
@@ -50,7 +50,9 @@ export async function pRetry<T>(input: InputFunction<T>, options: Options = {}):
 		throw new TypeError('Expected `retries` to be a non-negative number.');
 	}
 
-	mergedOptions.signal?.throwIfAborted();
+	const signal = mergedOptions.signal;
+
+	throwIfAborted(signal);
 
 	let attemptNumber = 0;
 	const startTime = Date.now();
@@ -61,11 +63,11 @@ export async function pRetry<T>(input: InputFunction<T>, options: Options = {}):
 		attemptNumber++;
 
 		try {
-			mergedOptions.signal?.throwIfAborted();
+			throwIfAborted(signal);
 
 			const result = await input(attemptNumber);
 
-			mergedOptions.signal?.throwIfAborted();
+			throwIfAborted(signal);
 
 			return result;
 		} catch (e) {
@@ -73,7 +75,7 @@ export async function pRetry<T>(input: InputFunction<T>, options: Options = {}):
 				e instanceof Error ? e : new TypeError(`Non-error was thrown: "${e}". You should only throw errors.`);
 
 			if (e instanceof AbortError || (e instanceof TypeError && !isNetworkError(error))) {
-				throw e;
+				throw error;
 			}
 
 			const context = createRetryContext(error, attemptNumber, mergedOptions.retries);
@@ -106,25 +108,38 @@ export async function pRetry<T>(input: InputFunction<T>, options: Options = {}):
 
 			// Introduce delay
 			if (finalDelay > 0) {
-				await new Promise((resolve, reject) => {
-					const timeoutToken = setTimeout(resolve, finalDelay);
+				await new Promise<void>((resolve, reject) => {
+					const timeoutToken = setTimeout(() => {
+						cleanup();
+						resolve();
+					}, finalDelay);
 
 					if (mergedOptions.unref) {
 						timeoutToken.unref?.();
 					}
 
-					mergedOptions.signal?.addEventListener(
-						'abort',
-						() => {
-							clearTimeout(timeoutToken);
-							reject(mergedOptions.signal?.reason ?? new Error('Operation aborted by user'));
-						},
-						{ once: true },
-					);
+					const abortHandler = () => {
+						cleanup();
+						reject(AbortError.fromSignal(signal!));
+					};
+
+					const cleanup = () => {
+						clearTimeout(timeoutToken);
+						signal?.removeEventListener('abort', abortHandler);
+					};
+
+					if (signal) {
+						if (signal.aborted) {
+							abortHandler();
+							return;
+						}
+
+						signal.addEventListener('abort', abortHandler, { once: true });
+					}
 				});
 			}
 
-			mergedOptions.signal?.throwIfAborted();
+			throwIfAborted(signal);
 		}
 	}
 
