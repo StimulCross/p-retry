@@ -10,11 +10,19 @@ describe('pRetry', () => {
 		it('should retry the specified number of times before succeeding', async () => {
 			let index = 0;
 
-			const returnValue = await pRetry(async attemptNumber => {
-				await delay(40);
-				index++;
-				return attemptNumber === 3 ? fixture : Promise.reject(fixtureError);
-			});
+			const returnValue = await pRetry(
+				async attemptNumber => {
+					await delay(40);
+					index++;
+					return attemptNumber === 3 ? fixture : Promise.reject(fixtureError);
+				},
+				{
+					onFailedAttempt: context => {
+						expect(context.attemptNumber).toBe(index);
+						expect(context.error).toBe(fixtureError);
+					},
+				},
+			);
 
 			expect(returnValue).toBe(fixture);
 			expect(index).toBe(3);
@@ -36,7 +44,7 @@ describe('pRetry', () => {
 					},
 					{
 						retries: Number.POSITIVE_INFINITY,
-						minTimeout: 0, // Speed up test
+						minTimeout: 5, // Speed up test
 						unref: true,
 					},
 				),
@@ -46,17 +54,18 @@ describe('pRetry', () => {
 		});
 
 		it('should handle zero retries', async () => {
+			const fixtureError = new Error('fixture');
 			let attempts = 0;
 
 			await expect(
 				pRetry(
 					async () => {
 						attempts++;
-						throw new Error('test');
+						throw fixtureError;
 					},
 					{ retries: 0, unref: true },
 				),
-			).rejects.toThrow();
+			).rejects.toThrow(fixtureError);
 
 			expect(attempts).toBe(1); // Should only try once with zero retries
 		});
