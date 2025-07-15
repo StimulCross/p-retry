@@ -2,12 +2,39 @@ This is a fork of the popular [p-retry](https://github.com/StimulCross/p-retry/t
 
 > [!NOTE]
 > **Difference from the original library:**  
-> This fork includes a modified implementation of the `AbortError` class.
-> It now supports the standard [`cause`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Error/cause) property,
-> allowing you to specify an explicit error cause via the second constructor argument (e.g. `new AbortError('message', { cause: originalError })`).
+> This fork includes a modified implementation of the `AbortError` class, as well as improved integration with `AbortController`.
 >
-> Also, the `pRetry` function throws `AbortError` itself, instead of throwing the underlying original error.
-> Specify original error as `cause` to access it.
+> - `AbortError` now fully supports the standard [`cause`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Error/cause) property. You can pass an error cause via the second constructor argument:
+>
+>     ```ts
+>     throw new AbortError('Operation aborted', { cause: originalError });
+>     ```
+>
+> - The `pRetry` function throws an instance of `AbortError` directly when aborted, instead of throwing the original error. If you need access to the original error, you can retrieve it via the `cause` property.
+> - When `AbortController.abort(reason)` is used, the thrown `AbortError` will have:
+>     - `cause` set to `signal.reason`, if available,
+>     - `signal` set to the corresponding `AbortSignal`, allowing consumers to inspect it:
+>
+>         ```ts
+>         const controller = new AbortController();
+>         controller.abort(new Error('Database unavailable'));
+>
+>         try {
+>         	await pRetry(fn, { signal: controller.signal });
+>         } catch (e) {
+>         	if (e instanceof AbortError) {
+>         		console.error('Aborted because:', e.cause); // → Error('Database unavailable')
+>         		console.log(e.signal.aborted); // → true
+>         	}
+>         }
+>         ```
+>
+> - The `AbortError` class also exposes two static helper methods for convenience:
+>
+>     ```ts
+>     AbortError.fromSignal(signal, 'Aborted by signal'); // → includes signal and cause
+>     AbortError.fromError(originalError, 'Aborted by error'); // → wraps an error as cause
+>     ```
 
 ---
 
