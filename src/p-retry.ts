@@ -78,6 +78,10 @@ export async function pRetry<T>(input: InputFunction<T>, options: Options = {}):
 				throw error;
 			}
 
+			if (error.name === 'AbortError') {
+				throw AbortError.fromError(error, 'An abort error occurred.');
+			}
+
 			const context = createRetryContext(error, attemptNumber, mergedOptions.retries);
 
 			// Always call onFailedAttempt
