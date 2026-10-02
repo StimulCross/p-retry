@@ -1,5 +1,0 @@
-packages/*/es
-packages/*/lib
-node_modules
-coverage
-

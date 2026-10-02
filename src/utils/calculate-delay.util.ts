@@ -1,13 +1,13 @@
-import { type MakeRequired, type Options } from '../types/index.js';
+import type { MakeRequired, Options } from '../types/index.js'
 
 export function calculateDelay(
 	attempt: number,
 	options: MakeRequired<Options, 'factor' | 'minTimeout' | 'maxTimeout'>,
-) {
-	const random = options.randomize ? Math.random() + 1 : 1;
+): number {
+	const random = options.randomize ? Math.random() + 1 : 1
 
-	let timeout = Math.round(random * Math.max(options.minTimeout, 1) * options.factor ** (attempt - 1));
-	timeout = Math.min(timeout, options.maxTimeout);
+	let timeout = Math.round(random * Math.max(options.minTimeout, 1) * options.factor ** (attempt - 1))
+	timeout = Math.min(timeout, options.maxTimeout)
 
-	return timeout;
+	return timeout
 }

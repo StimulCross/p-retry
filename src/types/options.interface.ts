@@ -1,4 +1,4 @@
-import { type RetryContext } from './retry-context.interface.js';
+import type { RetryContext } from './retry-context.interface.js'
 
 export interface Options {
 	/**
@@ -50,7 +50,7 @@ export interface Options {
 	 *
 	 *	If the `onFailedAttempt` function throws, all retries will be aborted and the original promise will reject with the thrown error.
 	 */
-	readonly onFailedAttempt?: (context: RetryContext) => void | Promise<void>;
+	readonly onFailedAttempt?: (context: RetryContext) => void | Promise<void>
 
 	/**
 	 *	Decide if a retry should occur based on the context. Returning true triggers a retry, false aborts with the error.
@@ -70,49 +70,49 @@ export interface Options {
 	 *
 	 *	In the example above, the operation will be retried unless the error is an instance of `CustomError`.
 	 */
-	readonly shouldRetry?: (context: RetryContext) => boolean | Promise<boolean>;
+	readonly shouldRetry?: (context: RetryContext) => boolean | Promise<boolean>
 
 	/**
 	 *	The maximum amount of times to retry the operation.
 	 *
 	 *	@default 10
 	 */
-	readonly retries?: number;
+	readonly retries?: number
 
 	/**
 	 *	The exponential factor to use.
 	 *
 	 *	@default 2
 	 */
-	readonly factor?: number;
+	readonly factor?: number
 
 	/**
 	 *The number of milliseconds before starting the first retry.
 	 *
 	 * @default 1000
 	 */
-	readonly minTimeout?: number;
+	readonly minTimeout?: number
 
 	/**
 	 *	The maximum number of milliseconds between two retries.
 	 *
 	 *	@default Infinity
 	 */
-	readonly maxTimeout?: number;
+	readonly maxTimeout?: number
 
 	/**
 	 *	Randomizes the timeouts by multiplying with a factor between 1 and 2.
 	 *
 	 *	@default false
 	 */
-	readonly randomize?: boolean;
+	readonly randomize?: boolean
 
 	/**
 	 *	The maximum time (in milliseconds) that the retried operation is allowed to run.
 	 *
 	 *	@default Infinity
 	 */
-	readonly maxRetryTime?: number;
+	readonly maxRetryTime?: number
 
 	/**
 	 *	You can abort retrying using [`AbortController`](https://developer.mozilla.org/en-US/docs/Web/API/AbortController).
@@ -135,7 +135,7 @@ export interface Options {
 	 *	}
 	 *	```
 	 */
-	readonly signal?: AbortSignal;
+	readonly signal?: AbortSignal
 
 	/**
 	 *	Prevents retry timeouts from keeping the process alive.
@@ -144,5 +144,5 @@ export interface Options {
 	 *
 	 *	@default false
 	 */
-	readonly unref?: boolean;
+	readonly unref?: boolean
 }

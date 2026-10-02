@@ -1,6 +1,6 @@
-import { AbortError } from './errors/index.js';
-import { type InputFunction, type Options } from './types/index.js';
-import { calculateDelay, createRetryContext, isNetworkError, throwIfAborted } from './utils/index.js';
+import type { InputFunction, Options } from './types/index.js'
+import { AbortError } from './errors/index.js'
+import { calculateDelay, createRetryContext, isNetworkError, throwIfAborted } from './utils/index.js'
 
 /**
  * Returns a `Promise` that is fulfilled when calling `input` returns a fulfilled promise.
@@ -40,114 +40,114 @@ export async function pRetry<T>(input: InputFunction<T>, options: Options = {}):
 		maxTimeout: options.maxTimeout ?? Number.POSITIVE_INFINITY,
 		maxRetryTime: options.maxRetryTime ?? Number.POSITIVE_INFINITY,
 		randomize: options.randomize ?? false,
-		onFailedAttempt: options.onFailedAttempt ?? (() => {}),
+		onFailedAttempt: options.onFailedAttempt ?? (() => { /* empty */ }),
 		shouldRetry: options.shouldRetry ?? (() => true),
 		signal: options.signal,
 		unref: options.unref ?? false,
-	};
-
-	if (typeof options.retries === 'number' && mergedOptions.retries < 0) {
-		throw new TypeError('Expected `retries` to be a non-negative number.');
 	}
 
-	const signal = mergedOptions.signal;
+	if (typeof options.retries === 'number' && mergedOptions.retries < 0) {
+		throw new TypeError('Expected `retries` to be a non-negative number.')
+	}
 
-	throwIfAborted(signal);
+	const signal = mergedOptions.signal
 
-	let attemptNumber = 0;
-	const startTime = Date.now();
+	throwIfAborted(signal)
 
-	const maxRetryTime = mergedOptions.maxRetryTime ?? Number.POSITIVE_INFINITY;
+	let attemptNumber = 0
+	const startTime = Date.now()
+
+	const maxRetryTime = mergedOptions.maxRetryTime
 
 	while (attemptNumber < mergedOptions.retries + 1) {
-		attemptNumber++;
+		attemptNumber++
 
 		try {
-			throwIfAborted(signal);
+			throwIfAborted(signal)
 
-			const result = await input(attemptNumber);
+			const result = await input(attemptNumber)
 
-			throwIfAborted(signal);
+			throwIfAborted(signal)
 
-			return result;
-		} catch (e) {
-			const error: Error =
-				e instanceof Error ? e : new TypeError(`Non-error was thrown: "${e}". You should only throw errors.`);
+			return result
+		}
+		catch (err) {
+			const error: Error
+				= err instanceof Error ? err : new TypeError(`Non-error was thrown: "${String(err)}". You should only throw errors.`)
 
-			if (e instanceof AbortError || (e instanceof TypeError && !isNetworkError(error))) {
-				throw error;
-			}
+			if (err instanceof AbortError || (err instanceof TypeError && !isNetworkError(error)))
+				throw error
 
-			if (error.name === 'AbortError') {
-				throw AbortError.fromError(error, 'An abort error occurred.');
-			}
+			if (error.name === 'AbortError')
+				throw AbortError.fromError(error, 'An abort error occurred.')
 
-			const context = createRetryContext(error, attemptNumber, mergedOptions.retries);
+			const context = createRetryContext(error, attemptNumber, mergedOptions.retries)
 
 			// Always call onFailedAttempt
-			await mergedOptions.onFailedAttempt(context);
+			await mergedOptions.onFailedAttempt(context)
 
-			const currentTime = Date.now();
+			const currentTime = Date.now()
 
 			if (
-				currentTime - startTime >= maxRetryTime ||
-				attemptNumber >= mergedOptions.retries + 1 ||
-				!(await mergedOptions.shouldRetry(context))
+				currentTime - startTime >= maxRetryTime
+				|| attemptNumber >= mergedOptions.retries + 1
+				|| !await mergedOptions.shouldRetry(context)
 			) {
-				throw error; // Do not retry, throw the original error
+				throw error // Do not retry, throw the original error
 			}
 
 			// Calculate delay before next attempt
-			const delayTime = calculateDelay(attemptNumber, mergedOptions);
+			const delayTime = calculateDelay(attemptNumber, mergedOptions)
 
 			// Ensure that delay does not exceed maxRetryTime
-			const timeLeft = maxRetryTime - (currentTime - startTime);
+			const timeLeft = maxRetryTime - (currentTime - startTime)
 
 			/* istanbul ignore if */
-			if (timeLeft <= 0) {
-				throw error; // Max retry time exceeded
-			}
+			if (timeLeft <= 0)
+				throw error // Max retry time exceeded
 
-			const finalDelay = Math.min(delayTime, timeLeft);
+			const finalDelay = Math.min(delayTime, timeLeft)
 
 			// Introduce delay
 			if (finalDelay > 0) {
 				await new Promise<void>((resolve, reject) => {
 					const timeoutToken = setTimeout(() => {
-						cleanup();
-						resolve();
-					}, finalDelay);
+						cleanup()
+						resolve()
+					}, finalDelay)
 
-					if (mergedOptions.unref) {
-						timeoutToken.unref?.();
+					if (mergedOptions.unref)
+						// eslint-disable-next-line ts/no-unnecessary-condition
+						timeoutToken.unref?.()
+
+					const abortHandler = (): void => {
+						cleanup()
+						// eslint-disable-next-line ts/no-non-null-assertion
+						reject(AbortError.fromSignal(signal!))
 					}
 
-					const abortHandler = () => {
-						cleanup();
-						reject(AbortError.fromSignal(signal!));
-					};
-
-					const cleanup = () => {
-						clearTimeout(timeoutToken);
-						signal?.removeEventListener('abort', abortHandler);
-					};
+					function cleanup(): void {
+						clearTimeout(timeoutToken)
+						signal?.removeEventListener('abort', abortHandler)
+					}
 
 					if (signal) {
 						if (signal.aborted) {
-							abortHandler();
-							return;
+							abortHandler()
+
+							return
 						}
 
-						signal.addEventListener('abort', abortHandler, { once: true });
+						signal.addEventListener('abort', abortHandler, { once: true })
 					}
-				});
+				})
 			}
 
-			throwIfAborted(signal);
+			throwIfAborted(signal)
 		}
 	}
 
 	// Should not reach here, but in case it does, throw an error
 	/* istanbul ignore next */
-	throw new Error('Retry attempts exhausted without throwing an error.');
+	throw new Error('Retry attempts exhausted without throwing an error.')
 }

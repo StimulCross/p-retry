@@ -1,7 +1,8 @@
 // Source: https://github.com/sindresorhus/is-network-error/blob/main/index.js
 
-const isError = (value: unknown): value is Error =>
-	value instanceof Error || Object.prototype.toString.call(value) === '[object Error]';
+function isError(value: unknown): value is Error {
+	return value instanceof Error || Object.prototype.toString.call(value) === '[object Error]'
+}
 
 const errorMessages = new Set([
 	'network error', // Chrome
@@ -12,20 +13,18 @@ const errorMessages = new Set([
 	'Network request failed', // `cross-fetch`
 	'fetch failed', // Undici (Node.js)
 	'terminated', // Undici (Node.js)
-]);
+])
 
-export function isNetworkError(error: unknown) {
-	const isValid = error && isError(error) && error.name === 'TypeError' && typeof error.message === 'string';
+export function isNetworkError(error: unknown): boolean {
+	const isValid = error && isError(error) && error.name === 'TypeError' && typeof error.message === 'string'
 
-	if (!isValid) {
-		return false;
-	}
+	if (!isValid)
+		return false
 
 	// We do an extra check for Safari 17+ as it has a very generic error message.
 	// Network errors in Safari have no stack.
-	if (error.message === 'Load failed') {
-		return error.stack === undefined;
-	}
+	if (error.message === 'Load failed')
+		return error.stack === undefined
 
-	return errorMessages.has(error.message);
+	return errorMessages.has(error.message)
 }

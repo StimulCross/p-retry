@@ -1,49 +1,11 @@
 {
 	"name": "@stimulcross/p-retry",
+	"type": "module",
 	"version": "0.1.1",
 	"description": "Retry a promise-returning or async function",
+	"author": "Stimul Cross",
 	"license": "MIT",
 	"repository": "https://github.com/StimulCross/p-retry.git",
-	"author": "Stimul Cross",
-	"type": "module",
-	"main": "lib",
-	"types": "lib",
-	"exports": {
-		".": {
-			"types": "./lib/index.d.ts",
-			"default": "./lib/index.js"
-		}
-	},
-	"sideEffects": false,
-	"engines": {
-		"node": ">=20"
-	},
-	"scripts": {
-		"build": "tsc -p tsconfig.build.json",
-		"rebuild": "pnpm run clear && pnpm run build",
-		"clear": "del-cli lib",
-		"prepare": "husky",
-		"preversion": "pnpm run rebuild && pnpm run format:check && pnpm run lint",
-		"postversion": "pnpm install",
-		"prepublishOnly": "pnpm run rebuild && pnpm run format:check && pnpm run lint",
-		"format:check": "prettier --check \"**/*.{ts,md,js,mjs,json}\"",
-		"format:fix": "prettier --write \"**/*.{ts,md,js,mjs,json}\"",
-		"lint": "eslint .",
-		"lint:fix": "eslint . --fix",
-		"test": "vitest --run",
-		"test:verbose": "vitest --run --reporter=verbose",
-		"test:cov": "vitest --run --coverage",
-		"test:cov:verbose": "vitest --run --coverage --reporter=verbose"
-	},
-	"files": [
-		"lib",
-		"es",
-		"README.md",
-		"LICENSE",
-		"!lib/**/*.d.ts.map",
-		"!es/**/*.d.ts.map",
-		"!es/**/*.d.ts"
-	],
 	"keywords": [
 		"promise",
 		"retry",
@@ -63,26 +25,63 @@
 		"parallel",
 		"bluebird"
 	],
+	"sideEffects": false,
+	"exports": {
+		".": {
+			"types": "./lib/index.d.ts",
+			"default": "./lib/index.js"
+		}
+	},
+	"main": "lib",
+	"types": "lib",
+	"files": [
+		"!es/**/*.d.ts",
+		"!es/**/*.d.ts.map",
+		"!lib/**/*.d.ts.map",
+		"LICENSE",
+		"README.md",
+		"es",
+		"lib"
+	],
+	"engines": {
+		"node": ">=20"
+	},
+	"scripts": {
+		"build": "tsc -p tsconfig.build.json",
+		"rebuild": "pnpm run clear && pnpm run build",
+		"clear": "del-cli lib",
+		"prepare": "husky",
+		"preversion": "pnpm run rebuild && pnpm run format:check && pnpm run lint",
+		"postversion": "pnpm install",
+		"prepublishOnly": "pnpm run rebuild && pnpm run format:check && pnpm run lint",
+		"lint": "eslint",
+		"lint:fix": "eslint --fix",
+		"typecheck": "tsc --noEmit",
+		"test": "vitest --run",
+		"test:verbose": "vitest --run --reporter=verbose",
+		"test:cov": "vitest --run --coverage",
+		"test:cov:verbose": "vitest --run --coverage --reporter=verbose"
+	},
 	"devDependencies": {
 		"@stimulcross/commitlint-config": "^2.0.0",
-		"@stimulcross/eslint-config-node": "^2.0.0",
-		"@stimulcross/eslint-config-typescript": "^2.0.0",
-		"@stimulcross/prettier-config": "^2.0.0",
-		"@types/jest": "^30.0.0",
+		"@stimulcross/eslint-config": "^0.0.4",
 		"@types/node": "^26.6.3",
 		"@vitest/coverage-v8": "^5.0.3",
-		"commitlint": "^19.8.1",
+		"commitlint": "^21.2.3",
 		"del-cli": "^7.0.0",
-		"eslint": "^9.30.1",
+		"eslint": "^10.11.0",
+		"eslint-plugin-format": "^2.0.1",
 		"husky": "^9.1.7",
-		"lint-staged": "^16.1.2",
-		"prettier": "^3.6.2",
+		"nano-staged": "^1.0.2",
 		"tsukuru": "^0.8.3",
-		"typescript": "^5.8.3",
+		"typescript": "^6.0.3",
 		"vite": "^8.3.2",
 		"vitest": "^5.0.3"
 	},
 	"publishConfig": {
 		"access": "public"
+	},
+	"nano-staged": {
+		"*": "eslint --fix"
 	}
 }

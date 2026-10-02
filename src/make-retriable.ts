@@ -1,5 +1,5 @@
-import { pRetry } from './p-retry.js';
-import { type Options } from './types/index.js';
+import type { Options } from './types/index.js'
+import { pRetry } from './p-retry.js'
 
 /**
  *  Wrap a function so that each call is automatically retried on failure.
@@ -17,5 +17,5 @@ export function makeRetriable<Args extends readonly unknown[], Res>(
 	fn: (...args: Args) => Res | PromiseLike<Res>,
 	options: Options,
 ): (...args: Args) => Promise<Res> {
-	return (...args: Args) => pRetry<Res>(() => fn(...args), options);
+	return async (...args: Args) => await pRetry<Res>(() => fn(...args), options)
 }

@@ -8,7 +8,7 @@ export interface AbortErrorOptions extends ErrorOptions {
 	 * This helps trace where the cancellation request came from,
 	 * especially when multiple layers or sources may abort the operation.
 	 */
-	readonly signal?: AbortSignal;
+	readonly signal?: AbortSignal
 }
 
 /**
@@ -29,27 +29,28 @@ export class AbortError extends Error {
 	/**
 	 * Optional signal that triggered the abort.
 	 */
-	public readonly signal?: AbortSignal;
+	public readonly signal?: AbortSignal
 
 	/** @internal */
 	constructor(message?: string, options?: AbortErrorOptions) {
-		super(message, options);
+		super(message, options)
 
-		this.name = new.target.name;
-		this.signal = options?.signal;
+		this.name = new.target.name
+		this.signal = options?.signal
 
-		Object.setPrototypeOf(this, new.target.prototype);
+		Object.setPrototypeOf(this, new.target.prototype)
 
+		// eslint-disable-next-line ts/no-unnecessary-condition
 		if (Error.captureStackTrace) {
-			Error.captureStackTrace(this, new.target);
+			Error.captureStackTrace(this, new.target)
 		}
 	}
 
 	public static fromSignal(signal: AbortSignal, message: string = 'Aborted by signal'): AbortError {
-		return new AbortError(message, { signal, cause: signal.reason });
+		return new AbortError(message, { signal, cause: signal.reason })
 	}
 
 	public static fromError(error: Error, message: string = 'Aborted by error'): AbortError {
-		return new AbortError(message, { cause: error });
+		return new AbortError(message, { cause: error })
 	}
 }

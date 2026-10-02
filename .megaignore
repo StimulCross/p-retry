@@ -1,6 +1,5 @@
 +sync:.megaignore
 -d:node_modules
--d:es
 -d:coverage
 -d:lib
 -f:yarn.lock
