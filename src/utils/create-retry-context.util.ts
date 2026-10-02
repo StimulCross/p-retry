@@ -1,4 +1,4 @@
-import { type RetryContext } from '../types';
+import { type RetryContext } from '../types/index.js';
 
 export function createRetryContext(error: Error, attemptNumber: number, retries: number): RetryContext {
 	// Minus 1 from attemptNumber because the first attempt does not count as a retry

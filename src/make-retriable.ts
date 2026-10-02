@@ -1,5 +1,5 @@
-import { pRetry } from './p-retry';
-import { type Options } from './types';
+import { pRetry } from './p-retry.js';
+import { type Options } from './types/index.js';
 
 /**
  *  Wrap a function so that each call is automatically retried on failure.

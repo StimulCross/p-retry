@@ -1,6 +1,6 @@
-import { AbortError } from './errors';
-import { type InputFunction, type Options } from './types';
-import { calculateDelay, createRetryContext, isNetworkError, throwIfAborted } from './utils';
+import { AbortError } from './errors/index.js';
+import { type InputFunction, type Options } from './types/index.js';
+import { calculateDelay, createRetryContext, isNetworkError, throwIfAborted } from './utils/index.js';
 
 /**
  * Returns a `Promise` that is fulfilled when calling `input` returns a fulfilled promise.

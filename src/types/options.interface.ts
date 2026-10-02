@@ -1,4 +1,4 @@
-import { type RetryContext } from './retry-context.interface';
+import { type RetryContext } from './retry-context.interface.js';
 
 export interface Options {
 	/**

@@ -1,21 +1,24 @@
 {
 	"compilerOptions": {
-		"composite": true,
-		"target": "ES2020",
-		"module": "commonjs",
-		"moduleResolution": "node",
+		"target": "ES2022",
 		"lib": ["ES2022"],
-		"declaration": true,
-		"declarationMap": true,
-		"inlineSourceMap": true,
-		"isolatedModules": true,
-		"esModuleInterop": true,
-		"forceConsistentCasingInFileNames": true,
+
+		"module": "Node20",
+		"moduleResolution": "Node16",
+		"types": ["node"],
+
 		"strict": true,
-		"useUnknownInCatchVariables": true,
-		"skipLibCheck": true,
+		"noImplicitReturns": true,
 		"noUnusedLocals": true,
 		"noUnusedParameters": true,
-		"noImplicitReturns": true
-	}
+
+		"verbatimModuleSyntax": true,
+
+		"forceConsistentCasingInFileNames": true,
+		"skipLibCheck": true,
+
+		"noEmit": true
+	},
+	"include": ["src"],
+	"exclude": ["node_modules", "lib", "coverage"]
 }

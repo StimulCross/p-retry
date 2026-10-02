@@ -1,4 +1,4 @@
-import { AbortError } from '../errors';
+import { AbortError } from '../errors/index.js';
 
 /** @internal */
 export function throwIfAborted(signal?: AbortSignal): void {

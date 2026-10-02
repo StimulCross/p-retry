@@ -1,4 +1,4 @@
-import { type MakeRequired, type Options } from '../types';
+import { type MakeRequired, type Options } from '../types/index.js';
 
 export function calculateDelay(
 	attempt: number,

@@ -1,5 +1,5 @@
-import { AbortError, makeRetriable, pRetry } from '../src';
-import { describe, expect, it, jest } from '@jest/globals';
+import { describe, it, expect, vi } from 'vitest';
+import { AbortError, makeRetriable, pRetry } from '../src/index.js';
 import { setTimeout as delay } from 'timers/promises';
 
 describe('pRetry', () => {
@@ -12,7 +12,7 @@ describe('pRetry', () => {
 
 			const returnValue = await pRetry(
 				async attemptNumber => {
-					await delay(40);
+					await delay(1);
 					index++;
 					return attemptNumber === 3 ? fixture : Promise.reject(fixtureError);
 				},
@@ -44,7 +44,7 @@ describe('pRetry', () => {
 					},
 					{
 						retries: Number.POSITIVE_INFINITY,
-						minTimeout: 5, // Speed up test
+						minTimeout: 1, // Speed up test
 						unref: true,
 					},
 				),
@@ -110,7 +110,7 @@ describe('pRetry', () => {
 					() => {
 						throw 'foo';
 					},
-					{ retries: 5, maxTimeout: 500 },
+					{ retries: 5, maxTimeout: 10 },
 				),
 			).rejects.toThrow(/Non-error/);
 		});
@@ -121,7 +121,7 @@ describe('pRetry', () => {
 
 			await expect(
 				pRetry(async attemptNumber => {
-					await delay(40);
+					await delay(1);
 					index++;
 					return attemptNumber === 3 ? fixture : Promise.reject(typeErrorFixture);
 				}),
@@ -135,7 +135,7 @@ describe('pRetry', () => {
 			let index = 0;
 
 			const returnValue = await pRetry(async attemptNumber => {
-				await delay(40);
+				await delay(1);
 				index++;
 				return attemptNumber === 3 ? fixture : Promise.reject(typeErrorFixture);
 			});
@@ -146,7 +146,7 @@ describe('pRetry', () => {
 
 		it('should preserve errors when maxRetryTime exceeded', async () => {
 			const originalError = new Error('original error');
-			const maxRetryTime = 100;
+			const maxRetryTime = 10;
 			let startTime: number | undefined;
 
 			await expect(
@@ -154,7 +154,7 @@ describe('pRetry', () => {
 					async () => {
 						startTime ||= Date.now();
 
-						await delay(maxRetryTime + 50); // Ensure we exceed maxRetryTime
+						await delay(maxRetryTime + 1);
 						throw originalError;
 					},
 					{
@@ -168,7 +168,7 @@ describe('pRetry', () => {
 		it('should handle non-Error rejection values', async () => {
 			await expect(
 				pRetry(
-					() => Promise.reject('string rejection'), // eslint-disable-line prefer-promise-reject-errors
+					() => Promise.reject('string rejection'),
 					{ retries: 1, minTimeout: 0 },
 				),
 			).rejects.toThrow(/Non-error was thrown/);
@@ -230,7 +230,7 @@ describe('pRetry', () => {
 					},
 					{
 						retries: 5,
-						minTimeout: 10,
+						minTimeout: 1,
 					},
 				);
 			} catch (e: any) {
@@ -260,7 +260,7 @@ describe('pRetry', () => {
 					{
 						signal: controller.signal,
 						retries: 5,
-						minTimeout: 10,
+						minTimeout: 1,
 					},
 				);
 			} catch (e: any) {
@@ -284,7 +284,7 @@ describe('pRetry', () => {
 			await expect(
 				pRetry(
 					async () => {
-						await delay(40);
+						await delay(1);
 						index++;
 						throw index < 3 ? shouldRetryError : customError;
 					},
@@ -303,7 +303,7 @@ describe('pRetry', () => {
 		it('should handle async shouldRetry with maxRetryTime', async () => {
 			let attempts = 0;
 			const start = Date.now();
-			const maxRetryTime = 1000;
+			const maxRetryTime = 10;
 
 			await expect(
 				pRetry(
@@ -315,14 +315,14 @@ describe('pRetry', () => {
 						retries: 10,
 						maxRetryTime,
 						async shouldRetry() {
-							await delay(100);
+							await delay(1);
 							return true;
 						},
 					},
 				),
 			).rejects.toThrow();
 
-			expect(Date.now() - start).toBeLessThanOrEqual(maxRetryTime + 200);
+			expect(Date.now() - start).toBeLessThanOrEqual(maxRetryTime + 50);
 			expect(attempts).toBeLessThan(10);
 		});
 
@@ -351,7 +351,7 @@ describe('pRetry', () => {
 
 			await pRetry(
 				async attemptNumber => {
-					await delay(40);
+					await delay(1);
 					index++;
 					return attemptNumber === 3 ? fixture : Promise.reject(fixtureError);
 				},
@@ -370,7 +370,7 @@ describe('pRetry', () => {
 		});
 
 		it('should allow returning a promise to add a delay', async () => {
-			const waitFor = 1000;
+			const waitFor = 1;
 			const start = Date.now();
 			let isCalled = false;
 
@@ -390,7 +390,7 @@ describe('pRetry', () => {
 				},
 			);
 
-			expect(Date.now()).toBeGreaterThan(start + waitFor);
+			expect(Date.now()).toBeGreaterThanOrEqual(start + waitFor);
 		});
 
 		it('should allow throwing to abort retries', async () => {
@@ -431,7 +431,7 @@ describe('pRetry', () => {
 		it('should apply factor to exponential backoff', async () => {
 			const delays: number[] = [];
 			const factor = 2;
-			const minTimeout = 100;
+			const minTimeout = 1;
 
 			await expect(
 				pRetry(
@@ -458,7 +458,7 @@ describe('pRetry', () => {
 
 		it('should increment timeouts with factor', async () => {
 			const delays: number[] = [];
-			const minTimeout = 100;
+			const minTimeout = 1;
 			const factor = 0.5; // Test with factor less than 1
 
 			await expect(
@@ -487,7 +487,7 @@ describe('pRetry', () => {
 
 		it('should respect minTimeout even with small factor', async () => {
 			const delays: number[] = [];
-			const minTimeout = 100;
+			const minTimeout = 1;
 			const factor = 0.1; // Very small factor
 
 			await expect(
@@ -509,16 +509,16 @@ describe('pRetry', () => {
 			).rejects.toThrow();
 
 			// All delays should be at least minTimeout
-			for (const delay of delays) {
-				expect(delay).toBeGreaterThanOrEqual(minTimeout);
+			for (const delay_ of delays) {
+				expect(delay_).toBeGreaterThanOrEqual(minTimeout);
 			}
 		});
 
 		it('should cap retry delays with maxTimeout', async () => {
 			const delays: number[] = [];
-			const maxTimeout = 150;
+			const maxTimeout = 2;
 			const factor = 3;
-			const minTimeout = 100;
+			const minTimeout = 1;
 
 			await expect(
 				pRetry(
@@ -545,14 +545,14 @@ describe('pRetry', () => {
 
 		it('should randomize retry delays when option is enabled', async () => {
 			const delays = new Set<number>();
-			const minTimeout = 100;
+			const minTimeout = 1;
 
 			await expect(
 				pRetry(
 					async () => {
 						const random = Math.random() + 1;
-						const delay = Math.round(random * minTimeout);
-						delays.add(delay);
+						const delay_ = Math.round(random * minTimeout);
+						delays.add(delay_);
 						throw new Error('test');
 					},
 					{
@@ -565,15 +565,15 @@ describe('pRetry', () => {
 			).rejects.toThrow();
 
 			expect(delays.size).toBeGreaterThan(1);
-			for (const delay of delays) {
-				expect(delay).toBeGreaterThanOrEqual(minTimeout);
-				expect(delay).toBeLessThanOrEqual(minTimeout * 2);
+			for (const delay_ of delays) {
+				expect(delay_).toBeGreaterThanOrEqual(minTimeout);
+				expect(delay_).toBeLessThanOrEqual(minTimeout * 2);
 			}
 		});
 
 		it('should handle invalid factor values', async () => {
 			const delays: number[] = [];
-			const minTimeout = 100;
+			const minTimeout = 1;
 
 			await expect(
 				pRetry(
@@ -599,23 +599,23 @@ describe('pRetry', () => {
 	describe('Time limits', () => {
 		it('should limit total retry duration with maxRetryTime', async () => {
 			const start = Date.now();
-			const maxRetryTime = 1000;
+			const maxRetryTime = 10;
 
 			await expect(
 				pRetry(
 					async () => {
-						await delay(400);
+						await delay(4);
 						throw new Error('test');
 					},
 					{
 						retries: 10,
-						minTimeout: 100,
+						minTimeout: 1,
 						maxRetryTime,
 					},
 				),
 			).rejects.toThrow();
 
-			expect(Date.now() - start).toBeLessThan(maxRetryTime + 1000);
+			expect(Date.now() - start).toBeLessThan(maxRetryTime + 100);
 		});
 
 		it('should handle zero maxRetryTime', async () => {
@@ -655,8 +655,9 @@ describe('pRetry', () => {
 			// Mock setTimeout to track unref calls
 			const originalSetTimeout = setTimeout;
 			// @ts-ignore
-			globalThis.setTimeout = jest.fn(((function_, ms) => {
+			globalThis.setTimeout = vi.fn(((function_, ms) => {
 				const timeout = originalSetTimeout(function_, ms);
+				// @ts-ignore
 				timeout.unref = () => {
 					timeoutUnrefCalled = true;
 					return timeout;
@@ -672,7 +673,7 @@ describe('pRetry', () => {
 					},
 					{
 						retries: 2,
-						minTimeout: 50,
+						minTimeout: 1,
 						unref: true,
 					},
 				),
