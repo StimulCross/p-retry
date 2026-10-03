@@ -1,4 +1,4 @@
-This is a fork of the popular [p-retry](https://github.com/StimulCross/p-retry/tree/main) library with support for both ESM and CommonJS module systems.
+This is a fork of the popular [p-retry](https://github.com/sindresorhus/p-retry) library with support for both ESM and CommonJS module systems.
 
 > [!NOTE]
 > **Difference from the original library:**  
@@ -114,7 +114,9 @@ Type: `object`
 
 Type: `Function`
 
-Callback invoked on each retry. Receives a context object containing the error and retry state information.
+Callback invoked on each failure, including the final failure and non-network `TypeError`s. Receives a context object containing the error and retry state information.
+
+The callback order is `shouldConsumeRetry` → `onFailedAttempt` → `shouldRetry`. No callbacks are called for abort errors. If `maxRetryTime` has already expired, only `onFailedAttempt` is called, with `retryDelay: 0`.
 
 ```js
 import { pRetry } from '@stimulcross/p-retry'
@@ -130,8 +132,10 @@ async function run() {
 }
 
 const result = await pRetry(run, {
-	onFailedAttempt: ({ error, attemptNumber, retriesLeft }) => {
-		console.log(`Attempt ${attemptNumber} failed. There are ${retriesLeft} retries left.`)
+	onFailedAttempt: ({ attemptNumber, retriesLeft, retriesConsumed, retryDelay, error }) => {
+		console.log(
+			`Attempt ${attemptNumber} failed. Planned delay: ${retryDelay}ms. There are ${retriesLeft} retries left.`,
+		)
 		// 1st request => Attempt 1 failed. There are 5 retries left.
 		// 2nd request => Attempt 2 failed. There are 4 retries left.
 		// …
@@ -141,6 +145,14 @@ const result = await pRetry(run, {
 
 console.log(result)
 ```
+
+The context is frozen and contains:
+
+- `error`: the normalized error.
+- `attemptNumber`: the current attempt, starting at 1.
+- `retriesLeft`: the remaining retry budget before this failure is consumed.
+- `retriesConsumed`: the number of retries consumed before the current failure.
+- `retryDelay`: the planned backoff delay in milliseconds. This is 0 when consumption is skipped, the retry budget is exhausted, or the time limit has already expired. The actual wait is capped by the remaining `maxRetryTime`. A later `shouldRetry` decision can still prevent the retry.
 
 The `onFailedAttempt` function can return a promise. For example, to add a [delay](https://github.com/sindresorhus/delay):
 
@@ -166,7 +178,7 @@ Type: `Function`
 
 Decide if a retry should occur based on the context. Returning true triggers a retry, false aborts with the error.
 
-It is not called for `TypeError` (except network errors) and `AbortError`.
+Called after `shouldConsumeRetry` and `onFailedAttempt`. It is not called for non-network `TypeError`s, abort errors, or when the retry/time budget is exhausted. If it throws, retries stop and the promise rejects with that error.
 
 ```js
 import { pRetry } from '@stimulcross/p-retry'
@@ -174,32 +186,51 @@ import { pRetry } from '@stimulcross/p-retry'
 async function run() { /* code */ }
 
 const result = await pRetry(run, {
-	shouldRetry: ({ error, attemptNumber, retriesLeft }) => !(error instanceof CustomError)
+	shouldRetry: ({ error }) => !(error instanceof CustomError),
 })
 ```
 
 In the example above, the operation will be retried unless the error is an instance of `CustomError`.
+
+##### shouldConsumeRetry(context)
+
+Type: `Function`
+
+Decide whether a failure consumes a retry from the `retries` budget. Returning `false` skips the built-in backoff and leaves `retriesConsumed` and the backoff sequence unchanged. `attemptNumber` still advances.
+
+Called before `onFailedAttempt` and `shouldRetry`, except on abort errors or when `maxRetryTime` has already expired. The operation is still subject to `shouldRetry`, `maxRetryTime`, and the remaining retry budget. Non-network `TypeError`s always stop retrying. If this callback throws, retries stop.
+
+```js
+import { pRetry } from '@stimulcross/p-retry'
+
+await pRetry(run, {
+	retries: 2,
+	shouldConsumeRetry: ({ error }) => !(error instanceof RateLimitError),
+})
+```
+
+If skipped failures need a delay, add it in `onFailedAttempt`; no built-in timer is scheduled for them.
 
 ##### retries
 
 Type: `number`\
 Default: `10`
 
-The maximum amount of times to retry the operation.
+The maximum amount of times to retry the operation. Must be a non-negative integer or `Infinity`.
 
 ##### factor
 
 Type: `number`\
 Default: `2`
 
-The exponential factor to use.
+The exponential factor to use. Must be finite and non-negative; `0` is treated as `1`.
 
 ##### minTimeout
 
 Type: `number`\
 Default: `1000`
 
-The number of milliseconds before starting the first retry.
+The number of milliseconds before starting the first retry. Set this to `0` to retry immediately without scheduling a timer.
 
 ##### maxTimeout
 
@@ -220,7 +251,9 @@ Randomizes the timeouts by multiplying with a factor between 1 and 2.
 Type: `number`\
 Default: `Infinity`
 
-The maximum time (in milliseconds) that the retried operation is allowed to run.
+The maximum time (in milliseconds) for retrying. Measured with the monotonic clock `performance.now()`, so system clock adjustments do not affect the limit. Time spent in `input` and callbacks counts toward the budget.
+
+This is a retry budget, not a hard timeout: it does not interrupt an in-flight `input` or callback. Pass an `AbortSignal` to cancellable operations when they need to stop while running.
 
 ##### signal
 
@@ -229,7 +262,7 @@ Type: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSign
 You can abort retrying using [`AbortController`](https://developer.mozilla.org/en-US/docs/Web/API/AbortController).
 
 ```js
-import { pRetry } from '@stimulcross/p-retry'
+import { AbortError, pRetry } from '@stimulcross/p-retry'
 
 async function run() { /* code */ }
 const controller = new AbortController()
@@ -242,8 +275,10 @@ try {
 	await pRetry(run, { signal: controller.signal })
 }
 catch (err) {
-	console.log(err.message)
-	// => 'User clicked cancel button'
+	if (err instanceof AbortError) {
+		console.log(err.cause) // Error('User clicked cancel button')
+		console.log(err.signal === controller.signal) // true
+	}
 }
 ```
 
@@ -258,7 +293,7 @@ Only affects platforms with a `.unref()` method on timeouts, such as Node.js.
 
 ### makeRetriable(function, options?)
 
-Wrap a function so that each call is automatically retried on failure.
+Wrap a function so that each call is automatically retried on failure. Options are optional, and the wrapper preserves `this` and all arguments on each attempt.
 
 ```js
 import { makeRetriable } from '@stimulcross/p-retry'
@@ -270,7 +305,9 @@ const response = await fetchWithRetry('https://sindresorhus.com/unicorn')
 
 ### AbortError(message, {cause})
 
-Abort retrying and reject the promise.
+Abort retrying and reject with this `AbortError` instance. No retry callbacks are called. Unlike upstream, this fork does not unwrap `cause` as the rejection reason.
+
+Native errors named `AbortError`, including `DOMException`, are wrapped with `AbortError.fromError` and retained as `cause`.
 
 #### message
 
@@ -330,6 +367,12 @@ catch (err) {
 ```
 
 The package does not handle process signals itself to avoid global side effects.
+
+## Compatibility
+
+This fork follows the retry behavior of upstream `p-retry` 8.0.1, while retaining named exports, TypeScript sources, ESM/CommonJS builds, no runtime dependencies, and Node.js 20 support. The custom abort contract described above remains unchanged.
+
+For synchronization details and migration notes, see [UPSTREAM_SYNC.md](./UPSTREAM_SYNC.md).
 
 ## Related
 

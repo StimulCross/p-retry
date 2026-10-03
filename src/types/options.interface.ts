@@ -2,11 +2,12 @@ import type { RetryContext } from './retry-context.interface.js'
 
 export interface Options {
 	/**
-	 *	Callback invoked on each retry. Receives a context object containing the error and retry state information.
+	 *	Callback invoked on each failure, including the final failure and non-network TypeErrors.
+	 *	Called after shouldConsumeRetry and before shouldRetry, except on abort errors.
 	 *
 	 *	@example
 	 *	```js
-	 *	import pRetry from 'p-retry';
+	 *	import { pRetry } from '@stimulcross/p-retry';
 	 *
 	 *	const run = async () => {
 	 *		const response = await fetch('https://sindresorhus.com/unicorn');
@@ -35,12 +36,12 @@ export interface Options {
 	 *
 	 *	@example
 	 *	```js
-	 *	import pRetry from 'p-retry';
+	 *	import { pRetry } from '@stimulcross/p-retry';
 	 *	import delay from 'delay';
 	 *
 	 *	const run = async () => { … };
 	 *
-	 *	const result = await pRetry(run*, {
+	 *	const result = await pRetry(run, {
 	 *		onFailedAttempt: async () => {
 	 *			console.log('Waiting for 1 second before retrying');
 	 *			await delay(1000);
@@ -50,16 +51,18 @@ export interface Options {
 	 *
 	 *	If the `onFailedAttempt` function throws, all retries will be aborted and the original promise will reject with the thrown error.
 	 */
-	readonly onFailedAttempt?: (context: RetryContext) => void | Promise<void>
+	onFailedAttempt?: (context: RetryContext) => void | Promise<void>
 
 	/**
 	 *	Decide if a retry should occur based on the context. Returning true triggers a retry, false aborts with the error.
 	 *
-	 *	It is not called for `TypeError` (except network errors) and `AbortError`.
+	 *	Called after shouldConsumeRetry and onFailedAttempt.
+	 *	Not called for non-network TypeErrors, abort errors, or exhausted retry/time budgets.
+	 *	If this callback throws, retries stop and the promise rejects with the thrown error.
 	 *
 	 *	@example
 	 *	```js
-	 *	import pRetry from 'p-retry';
+	 *	import { pRetry } from '@stimulcross/p-retry';
 	 *
 	 *	const run = async () => { … };
 	 *
@@ -70,55 +73,70 @@ export interface Options {
 	 *
 	 *	In the example above, the operation will be retried unless the error is an instance of `CustomError`.
 	 */
-	readonly shouldRetry?: (context: RetryContext) => boolean | Promise<boolean>
+	shouldRetry?: (context: RetryContext) => boolean | Promise<boolean>
 
 	/**
-	 *	The maximum amount of times to retry the operation.
+	 * Decide whether this failure consumes a retry from the retries budget.
+	 * Returning `false` skips the backoff delay and does not advance `retriesConsumed`.
+	 * The failure still goes through `onFailedAttempt` and `shouldRetry`, and is subject to
+	 * `maxRetryTime` and the remaining retry budget.
+	 *
+	 * Called before `onFailedAttempt` and `shouldRetry`, except on abort errors or when
+	 * `maxRetryTime` is already exhausted. If this callback throws, retries stop.
+	 */
+	shouldConsumeRetry?: (context: RetryContext) => boolean | Promise<boolean>
+
+	/**
+	 *	The maximum amount of times to retry the operation. A non-negative integer or Infinity.
 	 *
 	 *	@default 10
 	 */
-	readonly retries?: number
+	retries?: number
 
 	/**
 	 *	The exponential factor to use.
 	 *
 	 *	@default 2
 	 */
-	readonly factor?: number
+	factor?: number
 
 	/**
-	 *The number of milliseconds before starting the first retry.
+	 * The number of milliseconds before starting the first retry.
+	 *
+	 * Set this to `0` to retry immediately without scheduling a timer.
 	 *
 	 * @default 1000
 	 */
-	readonly minTimeout?: number
+	minTimeout?: number
 
 	/**
 	 *	The maximum number of milliseconds between two retries.
 	 *
 	 *	@default Infinity
 	 */
-	readonly maxTimeout?: number
+	maxTimeout?: number
 
 	/**
 	 *	Randomizes the timeouts by multiplying with a factor between 1 and 2.
 	 *
 	 *	@default false
 	 */
-	readonly randomize?: boolean
+	randomize?: boolean
 
 	/**
-	 *	The maximum time (in milliseconds) that the retried operation is allowed to run.
+	 *	The maximum time (in milliseconds) for retrying.
+	 *
+	 *	Includes time spent in callbacks. Does not interrupt an in-flight input or callback.
 	 *
 	 *	@default Infinity
 	 */
-	readonly maxRetryTime?: number
+	maxRetryTime?: number
 
 	/**
 	 *	You can abort retrying using [`AbortController`](https://developer.mozilla.org/en-US/docs/Web/API/AbortController).
 	 *
 	 *	```js
-	 *	import pRetry from 'p-retry';
+	 *	import { AbortError, pRetry } from '@stimulcross/p-retry';
 	 *
 	 *	const run = async () => { … };
 	 *	const controller = new AbortController();
@@ -130,12 +148,14 @@ export interface Options {
 	 *	try {
 	 *		await pRetry(run, {signal: controller.signal});
 	 *	} catch (error) {
-	 *		console.log(error.message);
-	 *		//=> 'User clicked cancel button'
+	 *		if (error instanceof AbortError) {
+	 *			console.log(error.cause); // Error('User clicked cancel button')
+	 *			console.log(error.signal === controller.signal); // true
+	 *		}
 	 *	}
 	 *	```
 	 */
-	readonly signal?: AbortSignal
+	signal?: AbortSignal
 
 	/**
 	 *	Prevents retry timeouts from keeping the process alive.
@@ -144,5 +164,5 @@ export interface Options {
 	 *
 	 *	@default false
 	 */
-	readonly unref?: boolean
+	unref?: boolean
 }

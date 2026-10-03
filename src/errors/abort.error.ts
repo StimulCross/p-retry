@@ -20,7 +20,7 @@ export interface AbortErrorOptions extends ErrorOptions {
  *
  * Useful when further attempts are known to be futile, for example, in HTTP 404 or fatal validation failures.
  *
- * @param message - An optional error message or Error instance to explain the reason for aborting.
+ * @param message - An optional error message to explain the reason for aborting.
  * @param options - Optional {@link AbortErrorOptions} used to customize the error, such as providing a `cause`.
  *
  * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Error/cause

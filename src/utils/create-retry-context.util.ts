@@ -1,12 +1,18 @@
 import type { RetryContext } from '../types/index.js'
 
-export function createRetryContext(error: Error, attemptNumber: number, retries: number): RetryContext {
-	// Minus 1 from attemptNumber because the first attempt does not count as a retry
-	const retriesLeft = retries - (attemptNumber - 1)
-
+/** @internal */
+export function createRetryContext(
+	error: Error,
+	attemptNumber: number,
+	retriesLeft: number,
+	retriesConsumed: number,
+	retryDelay: number,
+): RetryContext {
 	return Object.freeze({
 		error,
 		attemptNumber,
 		retriesLeft,
+		retriesConsumed,
+		retryDelay,
 	})
 }

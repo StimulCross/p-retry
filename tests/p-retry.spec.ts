@@ -1,739 +1,892 @@
-import { setTimeout as delay } from 'node:timers/promises'
-import { describe, expect, it, vi } from 'vitest'
+import type { Options, RetryContext } from '../src/index.js'
+import { runInNewContext } from 'node:vm'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AbortError, makeRetriable, pRetry } from '../src/index.js'
 
+beforeEach(() => {
+	vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date', 'performance'] })
+})
+
+afterEach(() => {
+	vi.restoreAllMocks()
+	vi.clearAllTimers()
+	vi.useRealTimers()
+})
+
+const fixture = Symbol('fixture')
+const fixtureError = new Error('fixture')
+const delay = async (milliseconds: number) => await new Promise<void>(resolve => setTimeout(resolve, milliseconds))
+
+// Handle rejections before advancing the clock, including errors thrown by hooks.
+async function runWithTimers<T>(promise: Promise<T>): Promise<T> {
+	const settled = promise.then(
+		value => ({ status: 'fulfilled' as const, value }),
+		(err: unknown) => ({ status: 'rejected' as const, reason: err }),
+	)
+
+	await vi.runAllTimersAsync()
+
+	const result = await settled
+
+	if (result.status === 'rejected') {
+		throw result.reason
+	}
+
+	return result.value
+}
+
 describe('pRetry', () => {
-	const fixture = Symbol('fixture')
-	const fixtureError = new Error('fixture')
+	describe('attempts and results', () => {
+		it('numbers attempts from one and stops on the first success', async () => {
+			const input = vi.fn((attempt: number) => {
+				if (attempt < 3) {
+					throw fixtureError
+				}
 
-	describe('basic retry functionality', () => {
-		it('should retry the specified number of times before succeeding', async () => {
-			let index = 0
-
-			const returnValue = await pRetry(
-				async attemptNumber => {
-					await delay(1)
-					index++
-
-					return attemptNumber === 3 ? fixture : await Promise.reject(fixtureError)
-				},
-				{
-					onFailedAttempt: context => {
-						expect(context.attemptNumber).toBe(index)
-						expect(context.error).toBe(fixtureError)
-					},
-				},
-			)
-
-			expect(returnValue).toBe(fixture)
-			expect(index).toBe(3)
+				return fixture
+			})
+			await expect(pRetry(input, { minTimeout: 0 })).resolves.toBe(fixture)
+			expect(input.mock.calls).toEqual([[1], [2], [3]])
 		})
 
-		it('should retry forever when specified', async () => {
-			let attempts = 0
-			const maxAttempts = 10 // Limit for test purposes
-
-			await expect(
-				pRetry(
-					async () => {
-						attempts++
-
-						if (attempts === maxAttempts) {
-							throw new AbortError('stop')
-						}
-
-						throw new Error('test')
-					},
-					{
-						retries: Number.POSITIVE_INFINITY,
-						minTimeout: 1, // Speed up test
-						unref: true,
-					},
-				),
-			).rejects.toThrow('stop')
-
-			expect(attempts).toBe(maxAttempts)
+		it.each([null, undefined, false, 0, ''])('accepts %s as a successful result', async value => {
+			const input = vi.fn(() => value)
+			const onFailedAttempt = vi.fn()
+			await expect(pRetry(input, { onFailedAttempt })).resolves.toBe(value)
+			expect(input).toHaveBeenCalledTimes(1)
+			expect(onFailedAttempt).not.toHaveBeenCalled()
 		})
 
-		it('should handle zero retries', async () => {
-			let attempts = 0
+		it('awaits an asynchronous input', async () => {
+			const input = vi.fn(async (attempt: number) => {
+				await delay(20)
 
-			await expect(
-				pRetry(
-					async () => {
-						attempts++
-						throw fixtureError
-					},
-					{ retries: 0, unref: true },
-				),
-			).rejects.toThrow(fixtureError)
+				if (attempt === 1) {
+					throw fixtureError
+				}
 
-			expect(attempts).toBe(1) // Should only try once with zero retries
+				return fixture
+			})
+			await expect(runWithTimers(pRetry(input, { minTimeout: 0 }))).resolves.toBe(fixture)
+			expect(input).toHaveBeenCalledTimes(2)
+			expect(performance.now()).toBe(40)
 		})
 
-		it('should handle synchronous input function', async () => {
-			let attempts = 0
-
-			await expect(
-				pRetry(
-					() => {
-						// Non-async function
-						attempts++
-						throw new Error('test')
-					},
-					{ retries: 2, minTimeout: 0 },
-				),
-			).rejects.toThrow()
-
-			expect(attempts).toBe(3) // Initial + 2 retries
+		it.each([0, 1, 3])('allows the initial attempt plus %i retries', async retries => {
+			const errors: Error[] = []
+			const input = vi.fn(() => {
+				const error = new Error(`failure ${errors.length + 1}`)
+				errors.push(error)
+				throw error
+			})
+			await expect(pRetry(input, { retries, minTimeout: 0 })).rejects.toThrow(`failure ${retries + 1}`)
+			expect(input).toHaveBeenCalledTimes(retries + 1)
 		})
 
-		it('should abort retries if input function returns null', async () => {
-			let attempts = 0
+		it('defaults to ten retries', async () => {
+			const input = vi.fn(() => {
+				throw fixtureError
+			})
+			await expect(pRetry(input, { minTimeout: 0 })).rejects.toBe(fixtureError)
+			expect(input).toHaveBeenCalledTimes(11)
+		})
 
-			const result = await pRetry(
-				() => {
-					attempts++
+		it('supports Infinity without consuming an infinite delay', async () => {
+			const contexts: RetryContext[] = []
 
-					return null
-				},
-				{ retries: 2 },
-			)
+			await expect(pRetry(attempt => {
+				if (attempt === 15) {
+					return fixture
+				}
 
-			expect(attempts).toBe(1) // Should stop after first success
-			expect(result).toBeNull()
+				throw fixtureError
+			}, {
+				retries: Infinity,
+				minTimeout: 0,
+				onFailedAttempt: context => { contexts.push(context) },
+			})).resolves.toBe(fixture)
+
+			expect(contexts).toHaveLength(14)
+			expect(contexts.every(context => context.retriesLeft === Infinity)).toBe(true)
+			expect(contexts.at(-1)?.retriesConsumed).toBe(13)
+		})
+
+		it('preserves the final error identity and stack', async () => {
+			const stack = fixtureError.stack
+
+			await expect(pRetry(() => {
+				throw fixtureError
+			}, { retries: 2, minTimeout: 0 })).rejects.toBe(fixtureError)
+
+			expect(fixtureError.stack).toBe(stack)
+		})
+
+		it('does not mutate the supplied options', async () => {
+			const options = Object.freeze({ retries: 1, minTimeout: 0, factor: 0 })
+
+			await expect(pRetry(() => {
+				throw fixtureError
+			}, options)).rejects.toBe(fixtureError)
+
+			expect(options).toEqual({ retries: 1, minTimeout: 0, factor: 0 })
 		})
 	})
 
-	describe('error handling', () => {
-		it('should throw useful error message when non-error is thrown', async () => {
-			await expect(
-				pRetry(
-					() => {
-						throw 'foo'
-					},
-					{ retries: 5, maxTimeout: 10 },
-				),
-			).rejects.toThrow(/Non-error/)
-		})
-
-		it('should not retry on TypeError', async () => {
-			const typeErrorFixture = new TypeError('type-error-fixture')
-			let index = 0
-
-			await expect(
-				pRetry(async attemptNumber => {
-					await delay(1)
-					index++
-
-					return attemptNumber === 3 ? fixture : await Promise.reject(typeErrorFixture)
-				}),
-			).rejects.toBe(typeErrorFixture)
-
-			expect(index).toBe(1)
-		})
-
-		it('should retry on TypeError - failed to fetch', async () => {
-			const typeErrorFixture = new TypeError('Failed to fetch')
-			let index = 0
-
-			const returnValue = await pRetry(async attemptNumber => {
-				await delay(1)
-				index++
-
-				return attemptNumber === 3 ? fixture : await Promise.reject(typeErrorFixture)
+	describe('errors', () => {
+		it.each(['failure', 42, null, undefined])('normalizes a non-error rejection: %s', async thrown => {
+			const shouldConsumeRetry = vi.fn((_context: RetryContext) => true)
+			const onFailedAttempt = vi.fn((_context: RetryContext) => { /* empty */ })
+			const shouldRetry = vi.fn(() => true)
+			const input = vi.fn(async () => {
+				throw thrown
 			})
 
-			expect(returnValue).toBe(fixture)
-			expect(index).toBe(3)
-		})
-
-		it('should preserve errors when maxRetryTime exceeded', async () => {
-			const originalError = new Error('original error')
-			const maxRetryTime = 10
-			let startTime: number | undefined
-
-			await expect(
-				pRetry(
-					async () => {
-						startTime ||= Date.now()
-
-						await delay(maxRetryTime + 1)
-						throw originalError
-					},
-					{
-						maxRetryTime,
-						minTimeout: 0,
-					},
-				),
-			).rejects.toThrow(originalError)
-		})
-
-		it('should handle non-Error rejection values', async () => {
-			await expect(
-				pRetry(
-
-					async () => { throw 'string rejection' },
-					{ retries: 1, minTimeout: 0 },
-				),
-			).rejects.toThrow(/Non-error was thrown/)
-		})
-	})
-
-	describe('abortError', () => {
-		it('should create AbortError with message', () => {
-			const error = new AbortError('Custom message')
-			expect(error).toBeInstanceOf(AbortError)
-			expect(error.name).toBe('AbortError')
-			expect(error.message).toBe('Custom message')
-			expect(error.signal).toBeUndefined()
-		})
-
-		it('should create AbortError with cause and options', () => {
-			const cause = new Error('Original failure')
-			const error = new AbortError('Aborting', { cause })
-
-			expect(error).toBeInstanceOf(AbortError)
-			expect(error.message).toBe('Aborting')
-			expect(error.cause).toBe(cause)
-			expect(error.signal).toBeUndefined()
-		})
-
-		it('should support AbortError.fromSignal', () => {
-			const controller = new AbortController()
-			controller.abort('some reason')
-
-			const error = AbortError.fromSignal(controller.signal, 'Aborted due to signal')
-
-			expect(error).toBeInstanceOf(AbortError)
-			expect(error.message).toBe('Aborted due to signal')
-			expect(error.signal).toBe(controller.signal)
-			expect(error.cause).toBe('some reason')
-		})
-
-		it('should support AbortError.fromError', () => {
-			const original = new Error('original')
-			const error = AbortError.fromError(original, 'wrapped')
-
-			expect(error).toBeInstanceOf(AbortError)
-			expect(error.message).toBe('wrapped')
-			expect(error.cause).toBe(original)
-			expect(error.signal).toBeUndefined()
-		})
-
-		it('should stop retrying immediately on AbortError', async () => {
-			let attempts = 0
-
-			expect.assertions(4)
-
-			try {
-				await pRetry(
-					async () => {
-						attempts++
-
-						if (attempts === 3)
-							throw new AbortError('No point in retrying', { cause: fixtureError })
-
-						throw new Error('Temporary failure')
-					},
-					{
-						retries: 5,
-						minTimeout: 1,
-					},
-				)
-			}
-			catch (err: any) {
-				expect(err).toBeInstanceOf(AbortError)
-				expect(err.message).toBe('No point in retrying')
-				expect(err.cause).toBe(fixtureError)
-			}
-
-			expect(attempts).toBe(3) // Should stop exactly on third attempt
-		})
-
-		it('should throw AbortError from signal abort (with reason)', async () => {
-			let attempts = 0
-			const controller = new AbortController()
-
-			expect.assertions(5)
-
-			try {
-				await pRetry(
-					async () => {
-						attempts++
-
-						if (attempts === 3) {
-							controller.abort(fixtureError)
-						}
-
-						throw new Error('keep retrying')
-					},
-					{
-						signal: controller.signal,
-						retries: 5,
-						minTimeout: 1,
-					},
-				)
-			}
-			catch (err: any) {
-				expect(err).toBeInstanceOf(AbortError)
-				expect(err.message).toBe('Aborted by signal')
-				expect(err.signal).toBe(controller.signal)
-				expect(err.cause).toBe(fixtureError)
-			}
-
-			// simulate abort on 3rd attempt
-			expect(attempts).toBe(3)
-		})
-	})
-
-	describe('shouldRetry option', () => {
-		it('should control retry behavior', async () => {
-			const shouldRetryError = new Error('should-retry')
-			const customError = new Error('custom-error')
-			let index = 0
-
-			await expect(
-				pRetry(
-					async () => {
-						await delay(1)
-						index++
-						throw index < 3 ? shouldRetryError : customError
-					},
-					{
-						async shouldRetry({ error }) {
-							return error.message === shouldRetryError.message
-						},
-						retries: 10,
-					},
-				),
-			).rejects.toBe(customError)
-
-			expect(index).toBe(3)
-		})
-
-		it('should handle async shouldRetry with maxRetryTime', async () => {
-			let attempts = 0
-			const start = Date.now()
-			const maxRetryTime = 10
-
-			await expect(
-				pRetry(
-					async () => {
-						attempts++
-						throw new Error('test')
-					},
-					{
-						retries: 10,
-						maxRetryTime,
-						async shouldRetry() {
-							await delay(1)
-
-							return true
-						},
-					},
-				),
-			).rejects.toThrow()
-
-			expect(Date.now() - start).toBeLessThanOrEqual(maxRetryTime + 50)
-			expect(attempts).toBeLessThan(10)
-		})
-
-		it('should accept undefined shouldRetry', async () => {
-			const error = new Error('thrown from onFailedAttempt')
-
-			await expect(
-				pRetry(
-					() => {
-						throw error
-					},
-					{
-						shouldRetry: undefined,
-						retries: 1,
-					},
-				),
-			).rejects.toBe(error)
-		})
-	})
-
-	describe('onFailedAttempt option', () => {
-		it('should provide correct error details', async () => {
-			const retries = 5
-			let index = 0
-			let attemptNumber = 0
-
-			await pRetry(
-				async attemptNum => {
-					await delay(1)
-					index++
-
-					return attemptNum === 3 ? fixture : await Promise.reject(fixtureError)
-				},
-				{
-					onFailedAttempt({ error, attemptNumber: attempt, retriesLeft }) {
-						expect(error).toBe(fixtureError)
-						expect(attempt).toBe(++attemptNumber)
-						expect(retriesLeft).toBe(retries - (index - 1))
-					},
-					retries,
-				},
+			await expect(pRetry(input, { shouldConsumeRetry, onFailedAttempt, shouldRetry })).rejects.toThrow(
+				`Non-error was thrown: "${thrown}". You should only throw errors.`,
 			)
 
-			expect(index).toBe(3)
-			expect(attemptNumber).toBe(2)
+			const context = onFailedAttempt.mock.calls[0][0]
+			expect(context.error).toBeInstanceOf(TypeError)
+			expect(shouldConsumeRetry.mock.calls[0][0].error).toBe(context.error)
+			expect(input).toHaveBeenCalledTimes(1)
+			expect(shouldRetry).not.toHaveBeenCalled()
 		})
 
-		it('should allow returning a promise to add a delay', async () => {
-			const waitFor = 1
-			const start = Date.now()
-			let isCalled = false
+		it.each([true, false])('reports a non-network TypeError but never retries it (consume=%s)', async consume => {
+			const error = new TypeError('programming error')
+			const input = vi.fn(() => {
+				throw error
+			})
+			const shouldConsumeRetry = vi.fn(() => consume)
+			const onFailedAttempt = vi.fn()
+			const shouldRetry = vi.fn(() => true)
+			await expect(pRetry(input, { shouldConsumeRetry, onFailedAttempt, shouldRetry })).rejects.toBe(error)
+			expect(input).toHaveBeenCalledTimes(1)
+			expect(shouldConsumeRetry).toHaveBeenCalledTimes(1)
+			expect(onFailedAttempt).toHaveBeenCalledTimes(1)
+			expect(shouldRetry).not.toHaveBeenCalled()
+		})
 
-			await pRetry(
-				async () => {
-					if (isCalled) {
-						return fixture
-					}
+		it.each([
+			'network error',
+			'Failed to fetch',
+			'NetworkError when attempting to fetch resource.',
+			'The Internet connection appears to be offline.',
+			'Network request failed',
+			'fetch failed',
+			'terminated',
+			' A network error occurred.',
+			'Network connection lost',
+			'error sending request for url (https://example.com): connection closed',
+		])('retries a network TypeError: %s', async message => {
+			const error = new TypeError(message)
+			const input = vi.fn((attempt: number) => {
+				if (attempt < 3) {
+					throw error
+				}
 
-					isCalled = true
+				return fixture
+			})
+			await expect(pRetry(input, { minTimeout: 0 })).resolves.toBe(fixture)
+			expect(input).toHaveBeenCalledTimes(3)
+		})
+
+		it.each(['no stack', 'Sentry', 'regular stack'] as const)('recognizes Safari Load failed with %s', async variant => {
+			const error = new TypeError('Load failed')
+
+			if (variant === 'no stack') {
+				delete error.stack
+			}
+			else if (variant === 'Sentry') {
+				Object.defineProperty(error, '__sentry_captured__', { value: true })
+			}
+
+			const input = vi.fn((attempt: number) => {
+				if (attempt === 1) {
+					throw error
+				}
+
+				return fixture
+			})
+			const promise = pRetry(input, { minTimeout: 0 })
+
+			if (variant === 'regular stack') {
+				await expect(promise).rejects.toBe(error)
+				expect(input).toHaveBeenCalledTimes(1)
+			}
+			else {
+				await expect(promise).resolves.toBe(fixture)
+				expect(input).toHaveBeenCalledTimes(2)
+			}
+		})
+
+		it('an explicit AbortError bypasses all failure hooks', async () => {
+			const input = vi.fn(() => {
+				throw new AbortError('stop')
+			})
+			const shouldConsumeRetry = vi.fn(() => true)
+			const onFailedAttempt = vi.fn()
+			const shouldRetry = vi.fn(() => true)
+			await expect(pRetry(input, { shouldConsumeRetry, onFailedAttempt, shouldRetry })).rejects.toThrow('stop')
+			expect(input).toHaveBeenCalledTimes(1)
+			expect(shouldConsumeRetry).not.toHaveBeenCalled()
+			expect(onFailedAttempt).not.toHaveBeenCalled()
+			expect(shouldRetry).not.toHaveBeenCalled()
+		})
+	})
+
+	describe('failure hooks and retry consumption', () => {
+		it('awaits shouldConsumeRetry, onFailedAttempt, then shouldRetry before the delay', async () => {
+			const order: string[] = []
+			const timers = vi.spyOn(globalThis, 'setTimeout')
+
+			await expect(runWithTimers(pRetry(() => {
+				throw fixtureError
+			}, {
+				retries: 1,
+				minTimeout: 20,
+				async shouldConsumeRetry() {
+					await Promise.resolve()
+					order.push('consume')
+
+					return true
+				},
+				async onFailedAttempt() {
+					await Promise.resolve()
+					order.push('failed')
+				},
+				async shouldRetry() {
+					await Promise.resolve()
+					expect(timers).not.toHaveBeenCalled()
+					order.push('retry')
+
+					return true
+				},
+			}))).rejects.toBe(fixtureError)
+
+			expect(order).toEqual(['consume', 'failed', 'retry', 'consume', 'failed'])
+			expect(timers.mock.calls.map(([, milliseconds]) => milliseconds)).toEqual([20])
+		})
+
+		it('provides frozen contexts, including the final failure', async () => {
+			const contexts: RetryContext[] = []
+
+			await expect(runWithTimers(pRetry(() => {
+				throw fixtureError
+			}, {
+				retries: 2,
+				minTimeout: 10,
+				onFailedAttempt: context => { contexts.push(context) },
+			}))).rejects.toBe(fixtureError)
+
+			expect(contexts).toEqual([
+				{ error: fixtureError, attemptNumber: 1, retriesLeft: 2, retriesConsumed: 0, retryDelay: 10 },
+				{ error: fixtureError, attemptNumber: 2, retriesLeft: 1, retriesConsumed: 1, retryDelay: 20 },
+				{ error: fixtureError, attemptNumber: 3, retriesLeft: 0, retriesConsumed: 2, retryDelay: 0 },
+			])
+
+			expect(contexts.every(Object.isFrozen)).toBe(true)
+
+			expect(() => {
+				Object.assign(contexts[0], { retriesLeft: 99 })
+			}).toThrow(TypeError)
+		})
+
+		it('reports a failure before shouldRetry rejects it', async () => {
+			const order: string[] = []
+			const input = vi.fn(() => {
+				throw fixtureError
+			})
+
+			await expect(pRetry(input, {
+				onFailedAttempt: () => { order.push('failed') },
+				shouldRetry: () => {
+					order.push('retry')
+
+					return false
+				},
+			})).rejects.toBe(fixtureError)
+
+			expect(order).toEqual(['failed', 'retry'])
+			expect(input).toHaveBeenCalledTimes(1)
+			expect(vi.getTimerCount()).toBe(0)
+		})
+
+		it('uses shouldRetry to stop on a later error', async () => {
+			const terminalError = new Error('terminal')
+			const input = vi.fn((attempt: number) => {
+				throw attempt < 3 ? fixtureError : terminalError
+			})
+
+			await expect(pRetry(input, {
+				minTimeout: 0,
+				shouldRetry: async ({ error }) => error !== terminalError,
+			})).rejects.toBe(terminalError)
+
+			expect(input).toHaveBeenCalledTimes(3)
+		})
+
+		it.each(['shouldConsumeRetry', 'onFailedAttempt', 'shouldRetry'] as const)('propagates errors from %s', async name => {
+			const hookError = new Error(`${name} failed`)
+			const input = vi.fn(() => {
+				throw fixtureError
+			})
+
+			await expect(pRetry(input, {
+				[name]: async () => { throw hookError },
+			})).rejects.toBe(hookError)
+
+			expect(input).toHaveBeenCalledTimes(1)
+			expect(vi.getTimerCount()).toBe(0)
+		})
+
+		it('awaits onFailedAttempt in addition to the backoff', async () => {
+			const starts: number[] = []
+
+			await expect(runWithTimers(pRetry(attempt => {
+				starts.push(performance.now())
+
+				if (attempt === 1) {
 					throw fixtureError
-				},
-				{
-					async onFailedAttempt() {
-						await delay(waitFor)
-					},
-				},
-			)
-
-			expect(Date.now()).toBeGreaterThanOrEqual(start + waitFor)
-		})
-
-		it('should allow throwing to abort retries', async () => {
-			const error = new Error('thrown from onFailedAttempt')
-
-			await expect(
-				pRetry(
-					async () => {
-						throw fixtureError
-					},
-					{
-						onFailedAttempt() {
-							throw error
-						},
-					},
-				),
-			).rejects.toBe(error)
-		})
-
-		it('should accept undefined onFailedAttempt', async () => {
-			const error = new Error('thrown from onFailedAttempt')
-
-			await expect(
-				pRetry(
-					() => {
-						throw error
-					},
-					{
-						onFailedAttempt: undefined,
-						retries: 1,
-					},
-				),
-			).rejects.toBe(error)
-		})
-	})
-
-	describe('retry delay options', () => {
-		it('should apply factor to exponential backoff', async () => {
-			const delays: number[] = []
-			const factor = 2
-			const minTimeout = 1
-
-			await expect(
-				pRetry(
-					async () => {
-						const attemptNumber = delays.length + 1
-						const expectedDelay = minTimeout * factor ** (attemptNumber - 1)
-						delays.push(expectedDelay)
-						throw new Error('test')
-					},
-					{
-						retries: 3,
-						factor,
-						minTimeout,
-						maxTimeout: Number.POSITIVE_INFINITY,
-						randomize: false,
-					},
-				),
-			).rejects.toThrow()
-
-			expect(delays[0]).toBe(minTimeout)
-			expect(delays[1]).toBe(minTimeout * factor)
-			expect(delays[2]).toBe(minTimeout * factor ** 2)
-		})
-
-		it('should increment timeouts with factor', async () => {
-			const delays: number[] = []
-			const minTimeout = 1
-			const factor = 0.5 // Test with factor less than 1
-
-			await expect(
-				pRetry(
-					async () => {
-						const attemptNumber = delays.length + 1
-						const expectedDelay = minTimeout * factor ** (attemptNumber - 1)
-						delays.push(expectedDelay)
-						throw new Error('test')
-					},
-					{
-						retries: 3,
-						factor,
-						minTimeout,
-						maxTimeout: Number.POSITIVE_INFINITY,
-						randomize: false,
-					},
-				),
-			).rejects.toThrow()
-
-			// Each delay should be factor times the previous
-			for (let i = 1; i < delays.length; i++) {
-				expect(delays[i] / delays[i - 1]).toBe(factor)
-			}
-		})
-
-		it('should respect minTimeout even with small factor', async () => {
-			const delays: number[] = []
-			const minTimeout = 1
-			const factor = 0.1 // Very small factor
-
-			await expect(
-				pRetry(
-					async () => {
-						const attemptNumber = delays.length + 1
-						const expectedDelay = Math.max(minTimeout, minTimeout * factor ** (attemptNumber - 1))
-						delays.push(expectedDelay)
-						throw new Error('test')
-					},
-					{
-						retries: 3,
-						factor,
-						minTimeout,
-						maxTimeout: Number.POSITIVE_INFINITY,
-						randomize: false,
-					},
-				),
-			).rejects.toThrow()
-
-			// All delays should be at least minTimeout
-			for (const delay_ of delays) {
-				expect(delay_).toBeGreaterThanOrEqual(minTimeout)
-			}
-		})
-
-		it('should cap retry delays with maxTimeout', async () => {
-			const delays: number[] = []
-			const maxTimeout = 2
-			const factor = 3
-			const minTimeout = 1
-
-			await expect(
-				pRetry(
-					async () => {
-						const attemptNumber = delays.length + 1
-						const expectedDelay = Math.min(minTimeout * factor ** (attemptNumber - 1), maxTimeout)
-						delays.push(expectedDelay)
-						throw new Error('test')
-					},
-					{
-						retries: 3,
-						minTimeout,
-						factor,
-						maxTimeout,
-						randomize: false,
-					},
-				),
-			).rejects.toThrow()
-
-			expect(delays[0]).toBe(minTimeout)
-			expect(delays[1]).toBe(maxTimeout)
-			expect(delays[2]).toBe(maxTimeout)
-		})
-
-		it('should randomize retry delays when option is enabled', async () => {
-			const delays = new Set<number>()
-			const minTimeout = 1
-
-			await expect(
-				pRetry(
-					async () => {
-						const random = Math.random() + 1
-						const delay_ = Math.round(random * minTimeout)
-						delays.add(delay_)
-						throw new Error('test')
-					},
-					{
-						retries: 3,
-						minTimeout,
-						factor: 1,
-						randomize: true,
-					},
-				),
-			).rejects.toThrow()
-
-			expect(delays.size).toBeGreaterThan(1)
-
-			for (const delay_ of delays) {
-				expect(delay_).toBeGreaterThanOrEqual(minTimeout)
-				expect(delay_).toBeLessThanOrEqual(minTimeout * 2)
-			}
-		})
-
-		it('should handle invalid factor values', async () => {
-			const delays: number[] = []
-			const minTimeout = 1
-
-			await expect(
-				pRetry(
-					async () => {
-						// Should default to minTimeout
-						delays.push(minTimeout)
-						throw new Error('test')
-					},
-					{
-						retries: 2,
-						factor: 0, // Invalid factor
-						minTimeout,
-						randomize: false,
-					},
-				),
-			).rejects.toThrow()
-
-			expect(delays[0]).toBe(minTimeout)
-			expect(delays[1]).toBe(minTimeout)
-		})
-	})
-
-	describe('time limits', () => {
-		it('should limit total retry duration with maxRetryTime', async () => {
-			const start = Date.now()
-			const maxRetryTime = 10
-
-			await expect(
-				pRetry(
-					async () => {
-						await delay(4)
-						throw new Error('test')
-					},
-					{
-						retries: 10,
-						minTimeout: 1,
-						maxRetryTime,
-					},
-				),
-			).rejects.toThrow()
-
-			expect(Date.now() - start).toBeLessThan(maxRetryTime + 100)
-		})
-
-		it('should handle zero maxRetryTime', async () => {
-			let attempts = 0
-
-			await expect(
-				pRetry(
-					async () => {
-						attempts++
-						throw new Error('test')
-					},
-					{ maxRetryTime: 0 },
-				),
-			).rejects.toThrow()
-
-			expect(attempts).toBe(1) // Should only try once with zero maxRetryTime
-		})
-	})
-
-	describe('parameter validation', () => {
-		it('should throw on negative retry count', async () => {
-			await expect(
-				pRetry(
-					async () => {
-						/* empty */
-					},
-					{ retries: -1 },
-				),
-			).rejects.toThrow('Expected `retries` to be a non-negative number.')
-		})
-	})
-
-	describe('timeout unref option', () => {
-		it('should call unref when option is enabled', async () => {
-			let isTimeoutUnrefCalled = false
-
-			// Mock setTimeout to track unref calls
-			const originalSetTimeout = setTimeout
-
-			// @ts-expect-error Mock
-			globalThis.setTimeout = vi.fn(((fn: () => void, ms: number) => {
-				const timeout = originalSetTimeout(fn, ms)
-
-				timeout.unref = () => {
-					isTimeoutUnrefCalled = true
-
-					return timeout
 				}
 
-				return timeout
-			}) as any)
+				return fixture
+			}, {
+				minTimeout: 100,
+				onFailedAttempt: async () => await delay(40),
+			}))).resolves.toBe(fixture)
 
-			await expect(
-				pRetry(
-					async () => {
-						throw new Error('test')
-					},
-					{
-						retries: 2,
-						minTimeout: 1,
-						unref: true,
-					},
-				),
-			).rejects.toThrow()
+			expect(starts).toEqual([0, 140])
+		})
 
-			expect(isTimeoutUnrefCalled).toBe(true)
+		it.each(['shouldConsumeRetry', 'onFailedAttempt', 'shouldRetry'] as const)('uses defaults when %s is undefined', async name => {
+			const input = vi.fn(() => {
+				throw fixtureError
+			})
+			await expect(pRetry(input, { retries: 1, minTimeout: 0, [name]: undefined })).rejects.toBe(fixtureError)
+			expect(input).toHaveBeenCalledTimes(2)
+		})
 
-			// Restore original setTimeout
-			globalThis.setTimeout = originalSetTimeout
+		it('skipped consumption preserves retries and backoff but advances attemptNumber', async () => {
+			const consumedContexts: RetryContext[] = []
+			const failedContexts: RetryContext[] = []
+			const timers = vi.spyOn(globalThis, 'setTimeout')
+
+			await expect(runWithTimers(pRetry(() => {
+				throw fixtureError
+			}, {
+				retries: 2,
+				minTimeout: 50,
+				async shouldConsumeRetry(context) {
+					consumedContexts.push(context)
+
+					return context.attemptNumber !== 1 && context.attemptNumber !== 3
+				},
+				onFailedAttempt: context => { failedContexts.push(context) },
+			}))).rejects.toBe(fixtureError)
+
+			expect(failedContexts.map(({ attemptNumber }) => attemptNumber)).toEqual([1, 2, 3, 4, 5])
+			expect(failedContexts.map(({ retriesConsumed }) => retriesConsumed)).toEqual([0, 0, 1, 1, 2])
+			expect(failedContexts.map(({ retriesLeft }) => retriesLeft)).toEqual([2, 2, 1, 1, 0])
+			expect(consumedContexts.map(({ retryDelay }) => retryDelay)).toEqual([50, 50, 100, 100, 0])
+			expect(failedContexts.map(({ retryDelay }) => retryDelay)).toEqual([0, 50, 0, 100, 0])
+			expect(timers.mock.calls.map(([, milliseconds]) => milliseconds)).toEqual([50, 100])
+			expect(consumedContexts.every(Object.isFrozen)).toBe(true)
+		})
+
+		it.each([0, 1])('cannot bypass an exhausted budget of %i by skipping consumption', async retries => {
+			const input = vi.fn(() => {
+				throw fixtureError
+			})
+			const shouldRetry = vi.fn(() => true)
+
+			await expect(pRetry(input, {
+				retries,
+				minTimeout: 0,
+				shouldConsumeRetry: ({ attemptNumber }) => attemptNumber <= retries,
+				shouldRetry,
+			})).rejects.toBe(fixtureError)
+
+			expect(input).toHaveBeenCalledTimes(retries + 1)
+			expect(shouldRetry).toHaveBeenCalledTimes(retries)
+		})
+
+		it('still asks shouldRetry when consumption is skipped', async () => {
+			const input = vi.fn(() => {
+				throw fixtureError
+			})
+			const shouldRetry = vi.fn(() => false)
+			await expect(pRetry(input, { shouldConsumeRetry: () => false, shouldRetry })).rejects.toBe(fixtureError)
+			expect(shouldRetry).toHaveBeenCalledOnce()
+			expect(input).toHaveBeenCalledOnce()
+			expect(vi.getTimerCount()).toBe(0)
 		})
 	})
 
-	describe('makeRetriable function', () => {
-		it('should wrap and retry the function', async () => {
-			let callCount = 0
+	describe('backoff', () => {
+		it.each([
+			{ name: 'defaults', options: {}, expected: [1000, 2000, 4000] },
+			{ name: 'factor 3', options: { minTimeout: 10, factor: 3 }, expected: [10, 30, 90] },
+			{ name: 'factor below one', options: { minTimeout: 100, factor: 0.5 }, expected: [100, 50, 25] },
+			{ name: 'small factor', options: { minTimeout: 100, factor: 0.1 }, expected: [100, 10, 1] },
+			{ name: 'factor zero becomes one', options: { minTimeout: 10, factor: 0 }, expected: [10, 10, 10] },
+			{ name: 'maxTimeout cap', options: { minTimeout: 10, factor: 3, maxTimeout: 20 }, expected: [10, 20, 20] },
+			{ name: 'maxTimeout below minTimeout', options: { minTimeout: 100, maxTimeout: 20 }, expected: [20, 20, 20] },
+			{ name: 'rounding', options: { minTimeout: 1, factor: 1.5 }, expected: [1, 2, 2] },
+		])('schedules actual delays: $name', async ({ options, expected }) => {
+			const timers = vi.spyOn(globalThis, 'setTimeout')
+			const starts: number[] = []
 
-			const function_ = async (a: number, b: number) => {
-				callCount++
+			await expect(runWithTimers(pRetry(() => {
+				starts.push(performance.now())
+				throw fixtureError
+			}, { ...options, retries: 3 }))).rejects.toBe(fixtureError)
 
-				if (callCount < 3) {
-					throw new Error('fail')
+			expect(timers.mock.calls.map(([, milliseconds]) => milliseconds)).toEqual(expected)
+			expect(starts.slice(1).map((start, index) => start - starts[index])).toEqual(expected)
+		})
+
+		it('does not start a retry before its delay elapses', async () => {
+			const input = vi.fn((attempt: number) => {
+				if (attempt === 1) {
+					throw fixtureError
 				}
 
-				return a + b
-			}
-
-			const retried = makeRetriable(function_, { retries: 5, minTimeout: 0 })
-			const result = await retried(2, 3)
-			expect(result).toBe(5)
-			expect(callCount).toBe(3)
+				return fixture
+			})
+			const done = expect(pRetry(input, { minTimeout: 100 })).resolves.toBe(fixture)
+			await vi.advanceTimersByTimeAsync(99)
+			expect(input).toHaveBeenCalledTimes(1)
+			await vi.advanceTimersByTimeAsync(1)
+			await done
+			expect(input).toHaveBeenCalledTimes(2)
 		})
 
-		it('should pass arguments and options', async () => {
-			let lastArguments: any[] = []
+		it.each([{ minTimeout: 0 }, { minTimeout: 100, maxTimeout: 0 }])('avoids timers for a zero delay: %j', async options => {
+			const timers = vi.spyOn(globalThis, 'setTimeout')
 
-			const function_ = (...args: any[]) => {
-				lastArguments = args
-				throw new Error('fail')
+			await expect(pRetry(() => {
+				throw fixtureError
+			}, { ...options, retries: 3 })).rejects.toBe(fixtureError)
+
+			expect(timers).not.toHaveBeenCalled()
+		})
+
+		it('randomizes, rounds, then caps the actual delay', async () => {
+			vi.spyOn(Math, 'random').mockReturnValueOnce(0).mockReturnValueOnce(0.99).mockReturnValue(0.5)
+			const timers = vi.spyOn(globalThis, 'setTimeout')
+
+			await expect(runWithTimers(pRetry(() => {
+				throw fixtureError
+			}, {
+				retries: 3,
+				minTimeout: 101,
+				factor: 1,
+				randomize: true,
+				maxTimeout: 180,
+			}))).rejects.toBe(fixtureError)
+
+			expect(timers.mock.calls.map(([, milliseconds]) => milliseconds)).toEqual([101, 180, 152])
+		})
+
+		it('does not randomize when randomize is false', async () => {
+			const random = vi.spyOn(Math, 'random')
+
+			await expect(pRetry(() => {
+				throw fixtureError
+			}, { retries: 2, minTimeout: 0 })).rejects.toBe(fixtureError)
+
+			expect(random).not.toHaveBeenCalled()
+		})
+	})
+
+	describe('maxRetryTime', () => {
+		it('still makes an initial attempt with a zero time budget', async () => {
+			const input = vi.fn(() => {
+				throw fixtureError
+			})
+			const shouldConsumeRetry = vi.fn(() => true)
+			const onFailedAttempt = vi.fn((_context: RetryContext) => { /* empty */ })
+			const shouldRetry = vi.fn(() => true)
+			await expect(pRetry(input, { maxRetryTime: 0, shouldConsumeRetry, onFailedAttempt, shouldRetry })).rejects.toBe(fixtureError)
+			expect(input).toHaveBeenCalledOnce()
+			expect(onFailedAttempt.mock.calls[0][0].retryDelay).toBe(0)
+			expect(shouldConsumeRetry).not.toHaveBeenCalled()
+			expect(shouldRetry).not.toHaveBeenCalled()
+		})
+
+		it('reports an input failure after its time budget has expired', async () => {
+			const input = vi.fn(async () => {
+				await delay(60)
+				throw fixtureError
+			})
+			const shouldConsumeRetry = vi.fn(() => true)
+			const onFailedAttempt = vi.fn((_context: RetryContext) => { /* empty */ })
+
+			await expect(runWithTimers(pRetry(input, {
+				maxRetryTime: 50,
+				shouldConsumeRetry,
+				onFailedAttempt,
+			}))).rejects.toBe(fixtureError)
+
+			expect(input).toHaveBeenCalledOnce()
+			expect(shouldConsumeRetry).not.toHaveBeenCalled()
+			expect(onFailedAttempt.mock.calls[0][0].retryDelay).toBe(0)
+		})
+
+		it.each(['shouldConsumeRetry', 'onFailedAttempt', 'shouldRetry'] as const)('counts time spent in %s', async name => {
+			const input = vi.fn(() => {
+				throw fixtureError
+			})
+			const shouldRetry = vi.fn(() => true)
+			const hook = vi.fn(async () => {
+				await delay(60)
+
+				return true
+			})
+
+			await expect(runWithTimers(pRetry(input, {
+				maxRetryTime: 50,
+				minTimeout: 100,
+				shouldRetry,
+				[name]: hook,
+			}))).rejects.toBe(fixtureError)
+
+			expect(input).toHaveBeenCalledOnce()
+			expect(hook).toHaveBeenCalledOnce()
+			expect(performance.now()).toBe(60)
+
+			if (name !== 'shouldRetry') {
+				expect(shouldRetry).not.toHaveBeenCalled()
+			}
+		})
+
+		it('caps the delay to the budget and permits a final attempt at its boundary', async () => {
+			const input = vi.fn(() => {
+				throw fixtureError
+			})
+			const contexts: RetryContext[] = []
+			const timers = vi.spyOn(globalThis, 'setTimeout')
+
+			await expect(runWithTimers(pRetry(input, {
+				maxRetryTime: 50,
+				minTimeout: 100,
+				onFailedAttempt: context => { contexts.push(context) },
+			}))).rejects.toBe(fixtureError)
+
+			expect(timers.mock.calls.map(([, milliseconds]) => milliseconds)).toEqual([50])
+			expect(input).toHaveBeenCalledTimes(2)
+			expect(contexts.map(({ retryDelay }) => retryDelay)).toEqual([100, 0])
+		})
+
+		it('subtracts callback time from the remaining delay budget', async () => {
+			const starts: number[] = []
+
+			await expect(runWithTimers(pRetry(() => {
+				starts.push(performance.now())
+				throw fixtureError
+			}, {
+				maxRetryTime: 50,
+				minTimeout: 100,
+				onFailedAttempt: async () => await delay(20),
+			}))).rejects.toBe(fixtureError)
+
+			expect(starts).toEqual([0, 50])
+			// Even the final onFailedAttempt is awaited; this is not a hard timeout.
+			expect(performance.now()).toBe(70)
+		})
+
+		it('limits unconsumed retries by elapsed time', async () => {
+			const input = vi.fn(async () => {
+				await delay(20)
+				throw fixtureError
+			})
+
+			await expect(runWithTimers(pRetry(input, {
+				maxRetryTime: 50,
+				shouldConsumeRetry: () => false,
+			}))).rejects.toBe(fixtureError)
+
+			expect(input).toHaveBeenCalledTimes(3)
+			expect(performance.now()).toBe(60)
+		})
+
+		it('does not interrupt an in-flight successful input', async () => {
+			await expect(runWithTimers(pRetry(async () => {
+				await delay(100)
+
+				return fixture
+			}, { maxRetryTime: 10 }))).resolves.toBe(fixture)
+
+			expect(performance.now()).toBe(100)
+		})
+
+		it('uses performance.now even when the wall clock moves backwards', async () => {
+			const input = vi.fn(async () => {
+				vi.setSystemTime(Date.now() - 100_000)
+				await delay(30)
+				throw fixtureError
+			})
+			await expect(runWithTimers(pRetry(input, { maxRetryTime: 50, minTimeout: 0 }))).rejects.toBe(fixtureError)
+			expect(input).toHaveBeenCalledTimes(2)
+			expect(performance.now()).toBe(60)
+		})
+	})
+
+	describe('validation', () => {
+		it.each([-1, -Infinity, NaN, 0.5, '2', null])('rejects invalid retries: %s', async retries => {
+			const input = vi.fn(() => fixture)
+			await expect(pRetry(input, { retries } as Options)).rejects.toThrow(TypeError)
+			expect(input).not.toHaveBeenCalled()
+		})
+
+		it.each(['factor', 'minTimeout', 'maxTimeout', 'maxRetryTime'] as const)('validates %s before input runs', async name => {
+			const input = vi.fn(() => fixture)
+
+			for (const value of [-1, -Infinity, NaN, '1']) {
+				await expect(pRetry(input, { [name]: value })).rejects.toThrow(TypeError)
 			}
 
-			const retried = makeRetriable(function_, { retries: 1, minTimeout: 0 })
-			await expect(async () => await retried('foo', 42)).rejects.toThrow()
-			expect(lastArguments).toEqual(['foo', 42])
+			if (name === 'factor' || name === 'minTimeout') {
+				await expect(pRetry(input, { [name]: Infinity })).rejects.toThrow(TypeError)
+			}
+			else {
+				await expect(pRetry(input, { [name]: Infinity })).resolves.toBe(fixture)
+			}
+
+			expect(input).toHaveBeenCalledTimes(name === 'factor' || name === 'minTimeout' ? 0 : 1)
 		})
+
+		it.each(['shouldConsumeRetry', 'onFailedAttempt', 'shouldRetry'] as const)('rejects a non-function %s', async name => {
+			const input = vi.fn(() => fixture)
+
+			for (const value of [false, 1, 'callback', {}]) {
+				await expect(pRetry(input, { [name]: value })).rejects.toThrow(`Expected \`${name}\` to be a function.`)
+			}
+
+			expect(input).not.toHaveBeenCalled()
+		})
+	})
+
+	describe('unref', () => {
+		it.each([false, true])('sets the timer reference state with unref=%s', async unref => {
+			const timers = vi.spyOn(globalThis, 'setTimeout')
+
+			await expect(runWithTimers(pRetry(() => {
+				throw fixtureError
+			}, {
+				retries: 1,
+				minTimeout: 10,
+				unref,
+			}))).rejects.toBe(fixtureError)
+
+			expect(timers).toHaveBeenCalledOnce()
+			const timeout = timers.mock.results[0].value as ReturnType<typeof setTimeout>
+			expect(timeout.hasRef()).toBe(!unref)
+		})
+
+		it('supports platforms whose timer handles have no unref method', async () => {
+			const schedule = globalThis.setTimeout
+
+			vi.spyOn(globalThis, 'setTimeout').mockImplementation((callback, milliseconds, ...args) => {
+				schedule(callback, milliseconds, ...args)
+
+				return 1 as unknown as ReturnType<typeof setTimeout>
+			})
+
+			await expect(runWithTimers(pRetry(() => {
+				throw fixtureError
+			}, {
+				retries: 1,
+				minTimeout: 10,
+				unref: true,
+			}))).rejects.toBe(fixtureError)
+		})
+	})
+
+	// eslint-disable-next-line test/prefer-lowercase-title
+	describe('AbortError and signals', () => {
+		it('supports message, cause, signal and static factories', () => {
+			const controller = new AbortController()
+			controller.abort(fixtureError)
+			const error = new AbortError('stop', { cause: fixtureError, signal: controller.signal })
+			expect(error).toBeInstanceOf(Error)
+			expect(error).toMatchObject({ name: 'AbortError', message: 'stop', cause: fixtureError, signal: controller.signal })
+			expect(AbortError.fromSignal(controller.signal)).toMatchObject({ cause: fixtureError, signal: controller.signal })
+			expect(AbortError.fromError(fixtureError, 'wrapped')).toMatchObject({ message: 'wrapped', cause: fixtureError })
+			expect(new AbortError('stop').signal).toBeUndefined()
+		})
+
+		it('preserves the identity of an explicit AbortError', async () => {
+			const error = new AbortError('stop', { cause: fixtureError })
+
+			await expect(pRetry(() => {
+				throw error
+			})).rejects.toBe(error)
+		})
+
+		it.each([new DOMException('cancelled', 'AbortError'), Object.assign(new Error('cancelled'), { name: 'AbortError' })])(
+			'wraps a native AbortError and bypasses callbacks: %s',
+			async error => {
+				const onFailedAttempt = vi.fn()
+
+				await expect(pRetry(() => {
+					throw error
+				}, { onFailedAttempt })).rejects.toMatchObject({
+					name: 'AbortError',
+					cause: error,
+				})
+
+				expect(onFailedAttempt).not.toHaveBeenCalled()
+			},
+		)
+
+		it.each([fixtureError, 'cancelled', undefined])('does not invoke input for a pre-aborted signal: %s', async reason => {
+			const controller = new AbortController()
+			controller.abort(reason)
+			const input = vi.fn(() => fixture)
+
+			await expect(pRetry(input, { signal: controller.signal })).rejects.toMatchObject({
+				name: 'AbortError',
+				cause: controller.signal.reason,
+				signal: controller.signal,
+			})
+
+			expect(input).not.toHaveBeenCalled()
+		})
+
+		it.each(['shouldConsumeRetry', 'onFailedAttempt', 'shouldRetry'] as const)('honors cancellation inside %s', async name => {
+			const controller = new AbortController()
+			const input = vi.fn(() => {
+				throw fixtureError
+			})
+
+			await expect(pRetry(input, {
+				signal: controller.signal,
+				[name]: () => {
+					controller.abort('cancelled')
+
+					return true
+				},
+			})).rejects.toMatchObject({ name: 'AbortError', cause: 'cancelled', signal: controller.signal })
+
+			expect(input).toHaveBeenCalledOnce()
+			expect(vi.getTimerCount()).toBe(0)
+		})
+
+		it('cancels a waiting retry promptly and removes the timer and listener', async () => {
+			const controller = new AbortController()
+			const remove = vi.spyOn(controller.signal, 'removeEventListener')
+			const input = vi.fn(() => {
+				throw fixtureError
+			})
+			const done = expect(pRetry(input, { signal: controller.signal, minTimeout: 1000 })).rejects.toMatchObject({
+				name: 'AbortError',
+				cause: fixtureError,
+				signal: controller.signal,
+			})
+			await vi.advanceTimersByTimeAsync(0)
+			expect(vi.getTimerCount()).toBe(1)
+			controller.abort(fixtureError)
+			await done
+			expect(input).toHaveBeenCalledOnce()
+			expect(vi.getTimerCount()).toBe(0)
+			expect(remove).toHaveBeenCalledWith('abort', expect.any(Function))
+			expect(performance.now()).toBe(0)
+		})
+
+		it('removes the abort listener after a successful wait', async () => {
+			const controller = new AbortController()
+			const add = vi.spyOn(controller.signal, 'addEventListener')
+			const remove = vi.spyOn(controller.signal, 'removeEventListener')
+
+			await expect(runWithTimers(pRetry(attempt => {
+				if (attempt === 1) {
+					throw fixtureError
+				}
+
+				return fixture
+			}, { signal: controller.signal, minTimeout: 10 }))).resolves.toBe(fixture)
+
+			expect(add).toHaveBeenCalledOnce()
+			expect(remove).toHaveBeenCalledWith('abort', add.mock.calls[0][1])
+			expect(vi.getTimerCount()).toBe(0)
+		})
+
+		it('honors cancellation even when consumption is skipped', async () => {
+			const controller = new AbortController()
+			const input = vi.fn(() => {
+				throw fixtureError
+			})
+
+			await expect(pRetry(input, {
+				signal: controller.signal,
+				shouldConsumeRetry: () => false,
+				shouldRetry: () => {
+					controller.abort(fixtureError)
+
+					return true
+				},
+			})).rejects.toMatchObject({ name: 'AbortError', cause: fixtureError })
+
+			expect(input).toHaveBeenCalledOnce()
+		})
+
+		it('recognizes a TypeError from another realm without retrying', async () => {
+			const error: Error = runInNewContext('new TypeError("programming error")')
+			const input = vi.fn(() => {
+				throw error
+			})
+			await expect(pRetry(input)).rejects.toBe(error)
+			expect(input).toHaveBeenCalledOnce()
+		})
+	})
+})
+
+describe('makeRetriable', () => {
+	it('forwards arguments unchanged on every attempt', async () => {
+		const object = { value: 42 }
+		const input = vi.fn((text: string, argument: typeof object) => {
+			if (input.mock.calls.length < 3) {
+				throw fixtureError
+			}
+
+			return `${text}:${argument.value}`
+		})
+		const wrapped = makeRetriable(input, { minTimeout: 0 })
+		await expect(wrapped('value', object)).resolves.toBe('value:42')
+		expect(input.mock.calls).toEqual([['value', object], ['value', object], ['value', object]])
+	})
+
+	it('preserves this', async () => {
+		const receiver = {
+			value: 42,
+			calls: 0,
+			run: makeRetriable(function (this: { value: number, calls: number }, add: number) {
+				this.calls++
+
+				if (this.calls === 1) {
+					throw fixtureError
+				}
+
+				return this.value + add
+			}, { minTimeout: 0 }),
+		}
+		await expect(receiver.run(8)).resolves.toBe(50)
+		expect(receiver.calls).toBe(2)
+	})
+
+	it('allows omitted options', async () => {
+		await expect(makeRetriable((value: number) => value * 2)(3)).resolves.toBe(6)
+	})
+
+	it('starts with a fresh retry budget on each call', async () => {
+		const input = vi.fn(() => {
+			throw fixtureError
+		})
+		const wrapped = makeRetriable(input, { retries: 1, minTimeout: 0 })
+		await expect(wrapped()).rejects.toBe(fixtureError)
+		await expect(wrapped()).rejects.toBe(fixtureError)
+		expect(input).toHaveBeenCalledTimes(4)
 	})
 })
