@@ -67,18 +67,28 @@ async function onAttemptFailure(
 	if (!await options.shouldRetry(context))
 		throw error
 
-	const remainingTime = calculateRemainingTime(startTime, options.maxRetryTime)
+	let remainingTime = calculateRemainingTime(startTime, options.maxRetryTime)
 
 	if (remainingTime <= 0)
 		throw error
 
 	throwIfAborted(options.signal)
 
+	const retryDelay = Math.min(effectiveDelay, remainingTime)
+
+	await options.onRetry(createRetryContext(error, attemptNumber, retriesLeft, retriesConsumed, retryDelay))
+
+	throwIfAborted(options.signal)
+
+	remainingTime = calculateRemainingTime(startTime, options.maxRetryTime)
+
+	if (remainingTime <= 0)
+		throw error
+
 	if (!shouldConsumeRetry)
 		return false
 
-	const finalDelay = Math.min(effectiveDelay, remainingTime)
-	await delayForRetry(finalDelay, options)
+	await delayForRetry(Math.min(retryDelay, remainingTime), options)
 
 	throwIfAborted(options.signal)
 
@@ -119,7 +129,7 @@ async function onAttemptFailure(
 export async function pRetry<T>(input: InputFunction<T>, options: Options = {}): Promise<T> {
 	validateRetries(options.retries)
 
-	const mergedOptions: EffectiveOptions = {
+	const effectiveOptions: EffectiveOptions = {
 		retries: options.retries ?? 10,
 		factor: options.factor ?? 2,
 		minTimeout: options.minTimeout ?? 1000,
@@ -131,41 +141,44 @@ export async function pRetry<T>(input: InputFunction<T>, options: Options = {}):
 		shouldConsumeRetry: options.shouldConsumeRetry ?? (() => true),
 		signal: options.signal,
 		unref: options.unref ?? false,
+		onRetry: options.onRetry ?? (() => { /* empty */ }),
+		abortOnSuccess: options.abortOnSuccess ?? true,
 	}
 
-	validateFunctionOption('onFailedAttempt', mergedOptions.onFailedAttempt)
-	validateFunctionOption('shouldRetry', mergedOptions.shouldRetry)
-	validateFunctionOption('shouldConsumeRetry', mergedOptions.shouldConsumeRetry)
-	validateNumberOption('factor', mergedOptions.factor)
-	validateNumberOption('minTimeout', mergedOptions.minTimeout)
-	validateNumberOption('maxTimeout', mergedOptions.maxTimeout, true)
-	validateNumberOption('maxRetryTime', mergedOptions.maxRetryTime, true)
+	validateFunctionOption('onFailedAttempt', effectiveOptions.onFailedAttempt)
+	validateFunctionOption('shouldRetry', effectiveOptions.shouldRetry)
+	validateFunctionOption('shouldConsumeRetry', effectiveOptions.shouldConsumeRetry)
+	validateFunctionOption('onRetry', effectiveOptions.onRetry)
+	validateNumberOption('factor', effectiveOptions.factor)
+	validateNumberOption('minTimeout', effectiveOptions.minTimeout)
+	validateNumberOption('maxTimeout', effectiveOptions.maxTimeout, true)
+	validateNumberOption('maxRetryTime', effectiveOptions.maxRetryTime, true)
 
-	if (mergedOptions.factor <= 0)
-		mergedOptions.factor = 1
+	if (effectiveOptions.factor <= 0)
+		effectiveOptions.factor = 1
 
-	throwIfAborted(mergedOptions.signal)
+	throwIfAborted(effectiveOptions.signal)
 
 	let attemptNumber = 0
 	let retriesConsumed = 0
 	const startTime = performance.now()
 
-	while (Number.isFinite(mergedOptions.retries) ? retriesConsumed <= mergedOptions.retries : true) {
+	while (Number.isFinite(effectiveOptions.retries) ? retriesConsumed <= effectiveOptions.retries : true) {
 		attemptNumber += 1
 
 		try {
-			throwIfAborted(mergedOptions.signal)
+			throwIfAborted(effectiveOptions.signal)
 
 			const result = await input(attemptNumber)
 
-			throwIfAborted(mergedOptions.signal)
+			if (effectiveOptions.abortOnSuccess)
+				throwIfAborted(effectiveOptions.signal)
 
 			return result
 		}
 		catch (err) {
-			if (await onAttemptFailure(err, attemptNumber, retriesConsumed, startTime, mergedOptions)) {
+			if (await onAttemptFailure(err, attemptNumber, retriesConsumed, startTime, effectiveOptions))
 				retriesConsumed += 1
-			}
 		}
 	}
 

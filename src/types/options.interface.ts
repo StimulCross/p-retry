@@ -165,4 +165,26 @@ export interface Options {
 	 *	@default false
 	 */
 	unref?: boolean
+
+	/**
+	 * Called after a retry is approved, before its delay, including unconsumed retries.
+	 * Receives the context of the failed attempt.
+	 *
+	 * The callback is awaited. Throwing or rejecting stops retrying with that error.
+	 * Cancellation or an exhausted time budget can still prevent the next attempt.
+	 */
+	onRetry?: (context: RetryContext) => void | Promise<void>
+
+	/**
+	 * Checks the signal after the input completes successfully, before returning its result.
+	 * If `true` and the signal is aborted, rejects with AbortError instead of returning the result.
+	 *
+	 * The input has already finished: side effects, such as resource updates, are not rolled back.
+	 * Set to `false` to preserve successful results when cancellation arrives during completed work.
+	 *
+	 * Does not interrupt the running input or affect abort checks before attempts or during retry delays.
+	 *
+	 * @default true
+	 */
+	abortOnSuccess?: boolean
 }

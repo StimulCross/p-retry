@@ -841,6 +841,272 @@ describe('pRetry', () => {
 			expect(input).toHaveBeenCalledOnce()
 		})
 	})
+
+	describe('onRetry', () => {
+		it('awaits the hook after approval and before the retry delay', async () => {
+			const order: string[] = []
+			const starts: number[] = []
+			const onRetry = vi.fn(async (context: RetryContext) => {
+				order.push('onRetry')
+				expect(Object.isFrozen(context)).toBe(true)
+
+				expect(context).toEqual({
+					error: fixtureError,
+					attemptNumber: 1,
+					retriesLeft: 1,
+					retriesConsumed: 0,
+					retryDelay: 100,
+				})
+
+				expect(vi.getTimerCount()).toBe(0)
+				await delay(40)
+				order.push('hook finished')
+			})
+
+			await expect(runWithTimers(pRetry(attempt => {
+				starts.push(performance.now())
+				order.push(`attempt ${attempt}`)
+
+				if (attempt === 1) {
+					throw fixtureError
+				}
+
+				return fixture
+			}, {
+				retries: 1,
+				minTimeout: 100,
+				shouldConsumeRetry: () => {
+					order.push('consume')
+
+					return true
+				},
+				onFailedAttempt: () => { order.push('failed') },
+				shouldRetry: () => {
+					order.push('approve')
+
+					return true
+				},
+				onRetry,
+			}))).resolves.toBe(fixture)
+
+			expect(order).toEqual([
+				'attempt 1',
+				'consume',
+				'failed',
+				'approve',
+				'onRetry',
+				'hook finished',
+				'attempt 2',
+			])
+
+			expect(starts).toEqual([0, 140])
+			expect(onRetry).toHaveBeenCalledOnce()
+		})
+
+		it('also runs for an unconsumed retry, with zero delay', async () => {
+			const onRetry = vi.fn((_context: RetryContext) => { /* empty */ })
+			const timers = vi.spyOn(globalThis, 'setTimeout')
+
+			await expect(pRetry(attempt => {
+				if (attempt === 1) {
+					throw fixtureError
+				}
+
+				return fixture
+			}, {
+				retries: 1,
+				shouldConsumeRetry: () => false,
+				onRetry,
+			})).resolves.toBe(fixture)
+
+			expect(onRetry).toHaveBeenCalledExactlyOnceWith({
+				error: fixtureError,
+				attemptNumber: 1,
+				retriesLeft: 1,
+				retriesConsumed: 0,
+				retryDelay: 0,
+			})
+
+			expect(timers).not.toHaveBeenCalled()
+		})
+
+		it.each([
+			{ name: 'exhausted retries', options: { retries: 0 }, error: fixtureError },
+			{ name: 'exhausted time', options: { maxRetryTime: 0 }, error: fixtureError },
+			{ name: 'shouldRetry false', options: { shouldRetry: () => false }, error: fixtureError },
+			{ name: 'TypeError', options: {}, error: new TypeError('invalid') },
+			{ name: 'AbortError', options: {}, error: new AbortError('stop') },
+		])('does not run after $name', async ({ options, error }) => {
+			const onRetry = vi.fn()
+			const input = vi.fn(() => {
+				throw error
+			})
+
+			await expect(pRetry(input, { ...options, onRetry })).rejects.toThrow(error.message)
+			expect(onRetry).not.toHaveBeenCalled()
+			expect(input).toHaveBeenCalledOnce()
+			expect(vi.getTimerCount()).toBe(0)
+		})
+
+		it.each([40, 100])('rechecks the time budget after a %i ms hook', async milliseconds => {
+			const input = vi.fn(() => {
+				throw fixtureError
+			})
+			const timers = vi.spyOn(globalThis, 'setTimeout')
+			const onRetry = vi.fn(async (context: RetryContext) => {
+				expect(context.retryDelay).toBe(100)
+				await delay(milliseconds)
+			})
+
+			await expect(runWithTimers(pRetry(input, {
+				minTimeout: 200,
+				maxRetryTime: 100,
+				onRetry,
+			}))).rejects.toBe(fixtureError)
+
+			expect(onRetry).toHaveBeenCalledOnce()
+			expect(input).toHaveBeenCalledTimes(milliseconds === 40 ? 2 : 1)
+
+			expect(timers.mock.calls.map(([, timeout]) => timeout)).toEqual(
+				milliseconds === 40 ? [40, 60] : [100],
+			)
+		})
+
+		it('propagates a rejected hook without starting another attempt', async () => {
+			const hookError = new Error('hook failed')
+			const input = vi.fn(() => {
+				throw fixtureError
+			})
+
+			await expect(pRetry(input, {
+				onRetry: async () => { throw hookError },
+			})).rejects.toBe(hookError)
+
+			expect(input).toHaveBeenCalledOnce()
+			expect(vi.getTimerCount()).toBe(0)
+		})
+
+		it.each(['shouldRetry', 'onRetry'] as const)('honors cancellation inside %s', async name => {
+			const controller = new AbortController()
+			const input = vi.fn(() => {
+				throw fixtureError
+			})
+			const onRetry = vi.fn(() => {
+				if (name === 'onRetry') {
+					controller.abort('cancelled')
+				}
+			})
+
+			await expect(pRetry(input, {
+				signal: controller.signal,
+				shouldRetry: () => {
+					if (name === 'shouldRetry') {
+						controller.abort('cancelled')
+					}
+
+					return true
+				},
+				onRetry,
+			})).rejects.toMatchObject({ name: 'AbortError', cause: 'cancelled' })
+
+			expect(onRetry).toHaveBeenCalledTimes(name === 'onRetry' ? 1 : 0)
+			expect(input).toHaveBeenCalledOnce()
+			expect(vi.getTimerCount()).toBe(0)
+		})
+
+		it('validates onRetry and accepts an explicit undefined', async () => {
+			const input = vi.fn(() => fixture)
+
+			await expect(pRetry(input, {
+				onRetry: false,
+			} as unknown as Options)).rejects.toThrow('Expected `onRetry` to be a function.')
+
+			expect(input).not.toHaveBeenCalled()
+			await expect(pRetry(input, { onRetry: undefined })).resolves.toBe(fixture)
+		})
+	})
+
+	describe('abortOnSuccess', () => {
+		it.each([undefined, false, true])(
+			'handles an abort during a successful input (option=%s)',
+			async abortOnSuccess => {
+				const controller = new AbortController()
+				const input = vi.fn(async () => {
+					await delay(20)
+
+					return fixture
+				})
+				const onFailedAttempt = vi.fn()
+				const onRetry = vi.fn()
+
+				const promise = pRetry(input, {
+					signal: controller.signal,
+					abortOnSuccess,
+					onFailedAttempt,
+					onRetry,
+				})
+				const done: Promise<void> = abortOnSuccess ?? true
+					? expect(promise).rejects.toMatchObject({
+							name: 'AbortError',
+							cause: fixtureError,
+							signal: controller.signal,
+						})
+					: expect(promise).resolves.toBe(fixture)
+
+				await vi.advanceTimersByTimeAsync(10)
+				controller.abort(fixtureError)
+				await vi.advanceTimersByTimeAsync(10)
+				await done
+
+				expect(input).toHaveBeenCalledOnce()
+				expect(onFailedAttempt).not.toHaveBeenCalled()
+				expect(onRetry).not.toHaveBeenCalled()
+			},
+		)
+
+		it.each([false, true])(
+			'does not start work with a pre-aborted signal (option=%s)',
+			async abortOnSuccess => {
+				const controller = new AbortController()
+				controller.abort(fixtureError)
+				const input = vi.fn(() => fixture)
+
+				await expect(pRetry(input, {
+					signal: controller.signal,
+					abortOnSuccess,
+				})).rejects.toMatchObject({ name: 'AbortError', cause: fixtureError })
+
+				expect(input).not.toHaveBeenCalled()
+			},
+		)
+
+		it.each([false, true])('still cancels retry delays (option=%s)', async abortOnSuccess => {
+			const controller = new AbortController()
+			const input = vi.fn(() => {
+				throw fixtureError
+			})
+			const done = expect(pRetry(input, {
+				signal: controller.signal,
+				abortOnSuccess,
+				minTimeout: 100,
+			})).rejects.toMatchObject({ name: 'AbortError', cause: fixtureError })
+
+			await vi.advanceTimersByTimeAsync(0)
+			expect(vi.getTimerCount()).toBe(1)
+			controller.abort(fixtureError)
+			await done
+
+			expect(input).toHaveBeenCalledOnce()
+			expect(vi.getTimerCount()).toBe(0)
+		})
+
+		it('accepts a successful result with abortOnSuccess=true when the signal is active', async () => {
+			await expect(pRetry(() => fixture, {
+				signal: new AbortController().signal,
+				abortOnSuccess: true,
+			})).resolves.toBe(fixture)
+		})
+	})
 })
 
 describe('makeRetriable', () => {
