@@ -2,6 +2,7 @@
 	"name": "@stimulcross/p-retry",
 	"type": "module",
 	"version": "0.1.1",
+	"packageManager": "pnpm@12.8.1",
 	"description": "Retry a promise-returning or async function",
 	"author": "Stimul Cross",
 	"license": "MIT",
@@ -44,7 +45,7 @@
 		"lib"
 	],
 	"engines": {
-		"node": ">=20"
+		"node": ">=22"
 	},
 	"scripts": {
 		"build": "tsc -p tsconfig.build.json",
