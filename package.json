@@ -36,12 +36,8 @@
 	"main": "lib",
 	"types": "lib",
 	"files": [
-		"!es/**/*.d.ts",
-		"!es/**/*.d.ts.map",
-		"!lib/**/*.d.ts.map",
 		"LICENSE",
 		"README.md",
-		"es",
 		"lib"
 	],
 	"engines": {
