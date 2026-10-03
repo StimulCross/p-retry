@@ -1,7 +1,7 @@
 {
 	"name": "@stimulcross/p-retry",
 	"type": "module",
-	"version": "0.1.1",
+	"version": "0.2.0",
 	"packageManager": "pnpm@12.8.1",
 	"description": "Retry a promise-returning or async function",
 	"author": "Stimul Cross",
