@@ -1,4 +1,4 @@
-This is a fork of the popular [p-retry](https://github.com/sindresorhus/p-retry) library with support for both ESM and CommonJS module systems.
+This is a fork of the popular [p-retry](https://github.com/sindresorhus/p-retry) library.
 
 > [!NOTE]
 > **Difference from the original library:**  
@@ -34,6 +34,32 @@ This is a fork of the popular [p-retry](https://github.com/sindresorhus/p-retry)
 >   ```ts
 >   AbortError.fromSignal(signal, 'Aborted by signal') // → includes signal and cause
 >   AbortError.fromError(originalError, 'Aborted by error') // → wraps an error as cause
+>   ```
+>
+> - **`onRetry(context)` callback:** Called after a retry is approved, before its delay.
+>   It also runs for retries that do not consume the retry budget, with `retryDelay: 0`.
+>   The callback is awaited; throwing or rejecting stops retrying with that error.
+>   Cancellation or an exhausted time budget can still prevent the next attempt.
+>
+>   ```ts
+>   await pRetry(fn, {
+>   	onRetry: ({ attemptNumber, retryDelay }) => {
+>   		console.log(`Retry planned after attempt ${attemptNumber}, delay: ${retryDelay}ms`)
+>   	},
+>   })
+>   ```
+>
+> - **`abortOnSuccess` option (`true` by default):** Controls the abort check after the input completes successfully, before its result is returned.
+>   By default, an aborted signal causes rejection with `AbortError` even though the work has already succeeded.
+>   Any side effects, such as resource updates, are not rolled back.
+>   Set this option to `false` to accept the successful result despite cancellation during the input.
+>   Abort checks before attempts and during retry delays remain active.
+>
+>   ```ts
+>   const result = await pRetry(updateResource, {
+>   	signal: controller.signal,
+>   	abortOnSuccess: false,
+>   })
 >   ```
 
 ---
@@ -367,12 +393,6 @@ catch (err) {
 ```
 
 The package does not handle process signals itself to avoid global side effects.
-
-## Compatibility
-
-This fork follows the retry behavior of upstream `p-retry` 8.0.1, while retaining named exports, TypeScript sources, ESM/CommonJS builds, no runtime dependencies, and Node.js 20 support. The custom abort contract described above remains unchanged.
-
-For synchronization details and migration notes, see [UPSTREAM_SYNC.md](./UPSTREAM_SYNC.md).
 
 ## Related
 
